@@ -1,0 +1,10 @@
+-- Database schema for ALE Ticket Management Tool
+-- 
+-- This file will contain table definitions for:
+-- - Users
+-- - Tickets
+-- - Comments
+-- - Attachments
+-- 
+-- Database connection and table creation not yet implemented.
+-- Phase 1: Foundation setup only.

@@ -1,0 +1,9 @@
+-- Sample data seed file for ALE Ticket Management Tool
+-- 
+-- This file will contain sample data for:
+-- - Test users
+-- - Sample tickets
+-- - Sample comments
+-- 
+-- Sample data generation not yet implemented.
+-- Phase 1: Foundation setup only.
