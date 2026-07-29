@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ALE Ticket Management Tool is a web-based application designed to streamline ticket management for ALE laboratory support.
+The ALE (Alcatel-Lucent Enterprise) Ticket Management Tool is a web-based application designed to streamline ticket management for Alcatel-Lucent Enterprise laboratory support.
 
 ## Technology Stack
 
@@ -38,7 +38,7 @@ Phase 1 is delivered across several milestones:
 
 - **Project Setup** ✅ — project structure, React frontend, Flask backend, health endpoint
 - **Database Foundation** 🔜 — PostgreSQL connection, schema, seed data
-- **Authentication** 🔜 — internal ALE team login, session management
+- **Authentication** 🔜 — internal Alcatel-Lucent Enterprise team login, session management
 - **Ticket Management** 🔜 — ticket CRUD, comments, attachments, search, filtering
 
 **Phase 2 (Future)**: AI-assisted features
