@@ -15,6 +15,10 @@ def create_app():
 
     app = Flask(__name__)
 
+    from app.request_handling import register_request_handling
+
+    register_request_handling(app)
+
     # Register blueprints
     from app.routes import health_bp
 

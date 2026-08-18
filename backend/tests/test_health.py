@@ -95,6 +95,7 @@ def test_health_endpoint_success(monkeypatch):
 
     assert response.status_code == 200
     assert response.is_json is True
+    assert response.headers.get("X-Request-ID")
 
     payload = response.get_json()
     assert payload["status"] == "healthy"
@@ -124,6 +125,7 @@ def test_health_endpoint_database_failure(monkeypatch):
 
     assert response.status_code == 503
     assert response.is_json is True
+    assert response.headers.get("X-Request-ID")
 
     payload = response.get_json()
     _assert_sanitized_unhealthy_payload(payload)
@@ -143,6 +145,7 @@ def test_health_endpoint_query_execution_failure(monkeypatch):
 
     assert response.status_code == 503
     assert response.is_json is True
+    assert response.headers.get("X-Request-ID")
 
     payload = response.get_json()
     _assert_sanitized_unhealthy_payload(payload)
@@ -162,6 +165,7 @@ def test_health_endpoint_unexpected_select_result(monkeypatch):
 
     assert response.status_code == 503
     assert response.is_json is True
+    assert response.headers.get("X-Request-ID")
 
     payload = response.get_json()
     _assert_sanitized_unhealthy_payload(payload)
