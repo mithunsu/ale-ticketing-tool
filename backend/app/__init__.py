@@ -11,6 +11,12 @@ LOCAL_ENV_FILE = BACKEND_DIR / ".env"
 DEFAULT_ALLOWED_ORIGINS = ["http://localhost:5173"]
 
 
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def parse_allowed_origins():
     """Return a sanitized list of trusted frontend origins from the environment."""
     configured_value = os.getenv("CORS_ALLOWED_ORIGINS")
@@ -31,7 +37,17 @@ def create_app():
     # Load local backend env defaults while preserving existing process env.
     load_dotenv(LOCAL_ENV_FILE, override=False)
 
+    secret_key = os.getenv("FLASK_SECRET_KEY")
+    if not secret_key or not secret_key.strip():
+        raise RuntimeError(
+            "FLASK_SECRET_KEY is required. Set it in backend/.env or the environment before starting the app."
+        )
+
     app = Flask(__name__)
+    app.config["SECRET_KEY"] = secret_key
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = _parse_bool(os.getenv("SESSION_COOKIE_SECURE"), default=False)
     allowed_origins = parse_allowed_origins()
 
     CORS(
@@ -53,8 +69,9 @@ def create_app():
     register_request_handling(app)
 
     # Register blueprints
-    from app.routes import health_bp
+    from app.routes import auth_bp, health_bp
 
     app.register_blueprint(health_bp)
+    app.register_blueprint(auth_bp)
 
     return app
