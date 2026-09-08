@@ -68,10 +68,15 @@ def create_app():
 
     register_request_handling(app)
 
+    from app.cli import register_cli
+
+    register_cli(app)
+
     # Register blueprints
-    from app.routes import auth_bp, health_bp
+    from app.routes import admin_users_bp, auth_bp, health_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(admin_users_bp)
 
     return app
