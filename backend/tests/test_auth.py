@@ -252,6 +252,276 @@ def test_logout_clears_session_idempotently(monkeypatch):
         assert second_response.get_json()["data"]["message"] == "Logged out successfully."
 
 
+def test_change_password_success_updates_hash_and_clears_session(monkeypatch):
+    app = _app_with_secret(monkeypatch, SESSION_COOKIE_SECURE="false")
+    user_id = str(uuid.uuid4())
+    current_password = "TemporaryPassword!"
+    new_password = "PermanentPassword123"
+
+    class _PasswordCursor:
+        def __init__(self):
+            self.executed = []
+            self.fetchone_result = (
+                user_id,
+                "Test User",
+                "test@example.com",
+                "requester",
+                "active",
+                "argon2$fakehash",
+                True,
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, query, params=None):
+            self.executed.append((query, params))
+
+        def fetchone(self):
+            result = self.fetchone_result
+            self.fetchone_result = None
+            return result
+
+    class _PasswordConnection:
+        def __init__(self):
+            self.cursor_instance = _PasswordCursor()
+            self.committed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
+
+    connection = _PasswordConnection()
+
+    import app.routes.auth as auth_routes
+
+    monkeypatch.setattr(auth_routes, "_user_lookup_by_id", lambda _user_id: (
+        user_id,
+        "Test User",
+        "test@example.com",
+        "requester",
+        "active",
+        "argon2$fakehash",
+        True,
+    ))
+    monkeypatch.setattr(auth_routes, "get_db_connection", lambda: connection)
+    monkeypatch.setattr(auth_routes, "check_password_hash", lambda hash_value, password: password == current_password and hash_value == "argon2$fakehash")
+    monkeypatch.setattr(auth_routes, "generate_password_hash", lambda value: f"argon2${value}_newhash")
+
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = user_id
+
+        response = client.post(
+            "/api/auth/change-password",
+            json={"current_password": current_password, "new_password": new_password},
+            headers={"Origin": "http://localhost:5173"},
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["message"] == "Password changed successfully. Please log in again."
+    assert "argon2$fakehash" not in response.get_data(as_text=True)
+    assert "PermanentPassword123" not in response.get_data(as_text=True)
+    assert "password_hash" not in response.get_data(as_text=True)
+    assert connection.committed is True
+    assert any("UPDATE users" in query and "password_hash" in query for query, _ in connection.cursor_instance.executed)
+    assert connection.cursor_instance.executed[-1][1][0] == "argon2$PermanentPassword123_newhash"
+    assert connection.cursor_instance.executed[-1][1][1] == user_id
+
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            assert "user_id" not in session
+
+
+def test_change_password_rejects_wrong_current_password_and_keeps_session(monkeypatch):
+    app = _app_with_secret(monkeypatch)
+    user_id = str(uuid.uuid4())
+
+    class _Connection:
+        def __init__(self):
+            self.committed = False
+            self.executed = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return self
+
+        def execute(self, query, params=None):
+            self.executed.append((query, params))
+
+        def fetchone(self):
+            return None
+
+        def commit(self):
+            self.committed = True
+
+    connection = _Connection()
+
+    import app.routes.auth as auth_routes
+
+    monkeypatch.setattr(auth_routes, "_user_lookup_by_id", lambda _user_id: (
+        user_id,
+        "Test User",
+        "test@example.com",
+        "requester",
+        "active",
+        "argon2$fakehash",
+        False,
+    ))
+    monkeypatch.setattr(auth_routes, "get_db_connection", lambda: connection)
+    monkeypatch.setattr(auth_routes, "check_password_hash", lambda hash_value, password: False)
+
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = user_id
+
+        response = client.post(
+            "/api/auth/change-password",
+            json={"current_password": "WrongCurrentPassword!", "new_password": "PermanentPassword123"},
+        )
+
+        assert response.status_code == 401
+        assert response.get_json()["error"] == {
+            "code": "INVALID_CURRENT_PASSWORD",
+            "message": "The current password is incorrect.",
+        }
+        assert connection.committed is False
+        assert connection.executed == []
+
+        with client.session_transaction() as session:
+            assert session["user_id"] == user_id
+
+
+def test_change_password_rejects_password_reuse_and_invalid_values(monkeypatch):
+    app = _app_with_secret(monkeypatch)
+    user_id = str(uuid.uuid4())
+
+    class _Connection:
+        def __init__(self):
+            self.committed = False
+            self.executed = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return self
+
+        def execute(self, query, params=None):
+            self.executed.append((query, params))
+
+        def fetchone(self):
+            return None
+
+        def commit(self):
+            self.committed = True
+
+    connection = _Connection()
+
+    import app.routes.auth as auth_routes
+
+    monkeypatch.setattr(auth_routes, "_user_lookup_by_id", lambda _user_id: (
+        user_id,
+        "Test User",
+        "test@example.com",
+        "requester",
+        "active",
+        "argon2$fakehash",
+        False,
+    ))
+    monkeypatch.setattr(auth_routes, "get_db_connection", lambda: connection)
+    monkeypatch.setattr(auth_routes, "check_password_hash", lambda hash_value, password: password == "TemporaryPassword!" and hash_value == "argon2$fakehash")
+
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = user_id
+
+        reuse_response = client.post(
+            "/api/auth/change-password",
+            json={"current_password": "TemporaryPassword!", "new_password": "TemporaryPassword!"},
+        )
+        assert reuse_response.status_code == 400
+        assert reuse_response.get_json()["error"]["code"] == "PASSWORD_REUSE_NOT_ALLOWED"
+
+        invalid_response = client.post(
+            "/api/auth/change-password",
+            json={"current_password": "TemporaryPassword!", "new_password": "short"},
+        )
+        assert invalid_response.status_code == 400
+        assert invalid_response.get_json()["error"]["code"] == "VALIDATION_ERROR"
+
+    assert connection.committed is False
+    assert connection.executed == []
+
+
+def test_restricted_user_can_access_auth_routes_but_not_admin_users(monkeypatch):
+    app = _app_with_secret(monkeypatch)
+    user_id = str(uuid.uuid4())
+
+    import app.routes.auth as auth_routes
+
+    monkeypatch.setattr(auth_routes, "_user_lookup_by_id", lambda _user_id: (
+        user_id,
+        "Restricted User",
+        "restricted@example.com",
+        "admin",
+        "active",
+        "argon2$fakehash",
+        True,
+    ))
+
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = user_id
+
+        me_response = client.get("/api/auth/me")
+        assert me_response.status_code == 200
+        assert me_response.get_json()["data"]["user"]["must_change_password"] is True
+
+        change_response = client.post(
+            "/api/auth/change-password",
+            json={"current_password": "TemporaryPassword!", "new_password": "PermanentPassword123"},
+        )
+        assert change_response.status_code == 401
+
+        logout_response = client.post("/api/auth/logout")
+        assert logout_response.status_code == 200
+
+        with client.session_transaction() as session:
+            session["user_id"] = user_id
+
+        admin_response = client.post(
+            "/api/admin/users",
+            json={
+                "name": "New User",
+                "email": "new.user@example.com",
+                "role": "requester",
+                "department": "Product",
+            },
+        )
+        assert admin_response.status_code == 403
+        assert admin_response.get_json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"
+
+
 def test_session_cookie_configuration_is_secure_per_environment(monkeypatch):
     app = _app_with_secret(monkeypatch, SESSION_COOKIE_SECURE="false")
     assert app.config["SESSION_COOKIE_HTTPONLY"] is True

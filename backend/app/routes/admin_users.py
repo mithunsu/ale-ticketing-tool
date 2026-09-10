@@ -21,6 +21,13 @@ EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 @admin_users_bp.route("/api/admin/users", methods=["POST"])
 @require_auth
 def create_user():
+    if g.current_user["must_change_password"]:
+        return error_response(
+            code="PASSWORD_CHANGE_REQUIRED",
+            message="You must change your temporary password before continuing.",
+            status_code=403,
+        )
+
     if g.current_user["role"] != "admin":
         return error_response(
             code="FORBIDDEN",
