@@ -1,6 +1,7 @@
 import uuid
 
 from app import create_app
+from conftest import csrf_headers
 
 
 class _StubCursor:
@@ -78,6 +79,7 @@ def test_login_success_sets_session_updates_last_login_and_returns_safe_user(mon
         response = client.post(
             "/api/auth/login",
             json={"email": " Test@Example.com ", "password": "CorrectPassword!"},
+            headers=csrf_headers(client),
         )
 
         assert response.status_code == 200
@@ -110,7 +112,7 @@ def test_login_bad_credentials_returns_same_401_and_no_session(monkeypatch):
     monkeypatch.setattr(auth_routes, "get_db_connection", _fake_get_db_connection)
 
     with app.test_client() as client:
-        unknown_response = client.post("/api/auth/login", json={"email": "missing@example.com", "password": "wrongpass"})
+        unknown_response = client.post("/api/auth/login", json={"email": "missing@example.com", "password": "wrongpass"}, headers=csrf_headers(client))
         assert unknown_response.status_code == 401
         assert unknown_response.get_json()["error"] == {
             "code": "INVALID_CREDENTIALS",
@@ -119,7 +121,7 @@ def test_login_bad_credentials_returns_same_401_and_no_session(monkeypatch):
         with client.session_transaction() as session:
             assert "user_id" not in session
 
-        incorrect_password_response = client.post("/api/auth/login", json={"email": "test@example.com", "password": "wrongpass"})
+        incorrect_password_response = client.post("/api/auth/login", json={"email": "test@example.com", "password": "wrongpass"}, headers=csrf_headers(client))
         assert incorrect_password_response.status_code == 401
         assert incorrect_password_response.get_json()["error"] == {
             "code": "INVALID_CREDENTIALS",
@@ -154,6 +156,7 @@ def test_login_inactive_account_returns_403_and_no_session(monkeypatch):
         response = client.post(
             "/api/auth/login",
             json={"email": "inactive@example.com", "password": "CorrectPassword!"},
+            headers=csrf_headers(client),
         )
 
     assert response.status_code == 403
@@ -170,17 +173,17 @@ def test_login_validation_errors_use_reusable_patterns(monkeypatch):
     app = _app_with_secret(monkeypatch)
 
     with app.test_client() as client:
-        response = client.post("/api/auth/login", data='{"password": "secret"}', content_type="application/json")
+        response = client.post("/api/auth/login", data='{"password": "secret"}', content_type="application/json", headers=csrf_headers(client))
         assert response.status_code == 400
         assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
         assert response.get_json()["error"]["details"]["email"] == "This field is required."
 
-        response = client.post("/api/auth/login", json={"email": "user@example.com"})
+        response = client.post("/api/auth/login", json={"email": "user@example.com"}, headers=csrf_headers(client))
         assert response.status_code == 400
         assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
         assert response.get_json()["error"]["details"]["password"] == "This field is required."
 
-        response = client.post("/api/auth/login", data="{broken json}", content_type="application/json")
+        response = client.post("/api/auth/login", data="{broken json}", content_type="application/json", headers=csrf_headers(client))
         assert response.status_code == 400
         assert response.get_json()["error"]["code"] == "INVALID_JSON"
 
@@ -240,14 +243,14 @@ def test_logout_clears_session_idempotently(monkeypatch):
         with client.session_transaction() as session:
             session["user_id"] = str(uuid.uuid4())
 
-        response = client.post("/api/auth/logout")
+        response = client.post("/api/auth/logout", headers=csrf_headers(client))
         assert response.status_code == 200
         assert response.get_json()["data"]["message"] == "Logged out successfully."
 
         with client.session_transaction() as session:
             assert "user_id" not in session
 
-        second_response = client.post("/api/auth/logout")
+        second_response = client.post("/api/auth/logout", headers=csrf_headers(client))
         assert second_response.status_code == 200
         assert second_response.get_json()["data"]["message"] == "Logged out successfully."
 
@@ -326,7 +329,7 @@ def test_change_password_success_updates_hash_and_clears_session(monkeypatch):
         response = client.post(
             "/api/auth/change-password",
             json={"current_password": current_password, "new_password": new_password},
-            headers={"Origin": "http://localhost:5173"},
+            headers=csrf_headers(client, Origin="http://localhost:5173"),
         )
 
     assert response.status_code == 200
@@ -394,6 +397,7 @@ def test_change_password_rejects_wrong_current_password_and_keeps_session(monkey
         response = client.post(
             "/api/auth/change-password",
             json={"current_password": "WrongCurrentPassword!", "new_password": "PermanentPassword123"},
+            headers=csrf_headers(client),
         )
 
         assert response.status_code == 401
@@ -458,6 +462,7 @@ def test_change_password_rejects_password_reuse_and_invalid_values(monkeypatch):
         reuse_response = client.post(
             "/api/auth/change-password",
             json={"current_password": "TemporaryPassword!", "new_password": "TemporaryPassword!"},
+            headers=csrf_headers(client),
         )
         assert reuse_response.status_code == 400
         assert reuse_response.get_json()["error"]["code"] == "PASSWORD_REUSE_NOT_ALLOWED"
@@ -465,6 +470,7 @@ def test_change_password_rejects_password_reuse_and_invalid_values(monkeypatch):
         invalid_response = client.post(
             "/api/auth/change-password",
             json={"current_password": "TemporaryPassword!", "new_password": "short"},
+            headers=csrf_headers(client),
         )
         assert invalid_response.status_code == 400
         assert invalid_response.get_json()["error"]["code"] == "VALIDATION_ERROR"
@@ -500,10 +506,11 @@ def test_restricted_user_can_access_auth_routes_but_not_admin_users(monkeypatch)
         change_response = client.post(
             "/api/auth/change-password",
             json={"current_password": "TemporaryPassword!", "new_password": "PermanentPassword123"},
+            headers=csrf_headers(client),
         )
         assert change_response.status_code == 401
 
-        logout_response = client.post("/api/auth/logout")
+        logout_response = client.post("/api/auth/logout", headers=csrf_headers(client))
         assert logout_response.status_code == 200
 
         with client.session_transaction() as session:
@@ -517,6 +524,7 @@ def test_restricted_user_can_access_auth_routes_but_not_admin_users(monkeypatch)
                 "role": "requester",
                 "department": "Product",
             },
+            headers=csrf_headers(client),
         )
         assert admin_response.status_code == 403
         assert admin_response.get_json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"

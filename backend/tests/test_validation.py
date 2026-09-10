@@ -5,6 +5,7 @@ from flask import jsonify, request
 from app import create_app
 from app.responses import validation_error_response
 from app.validation import parse_json_request, validate_object
+from conftest import csrf_headers
 
 
 TICKET_SCHEMA = {
@@ -26,6 +27,12 @@ TICKET_SCHEMA = {
         "allowed": ["low", "medium", "high", "critical"],
     },
 }
+
+
+def _post(client, *args, **kwargs):
+    existing_headers = kwargs.pop("headers", {})
+    headers = csrf_headers(client, **existing_headers)
+    return client.post(*args, headers=headers, **kwargs)
 
 
 def _create_validation_test_app():
@@ -59,7 +66,7 @@ def test_missing_content_type_returns_invalid_content_type():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post("/api/_test/parse-json", data='{"title": "A"}')
+        response = _post(client, "/api/_test/parse-json", data='{"title": "A"}')
 
     assert response.status_code == 400
     assert response.get_json() == {
@@ -74,7 +81,7 @@ def test_malformed_json_returns_invalid_json():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/parse-json",
             data='{"title": ',
             content_type="application/json",
@@ -93,7 +100,7 @@ def test_empty_json_body_returns_empty_json_body_error():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/parse-json",
             data="",
             content_type="application/json",
@@ -112,7 +119,7 @@ def test_json_array_root_returns_invalid_json_object_error():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/parse-json",
             json=["not", "an", "object"],
         )
@@ -130,7 +137,7 @@ def test_valid_json_object_parsing_succeeds():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/parse-json",
             json={"title": "A"},
         )
@@ -146,7 +153,7 @@ def test_required_field_missing_returns_validation_error():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate",
             json={"description": "Desc", "priority": "low"},
         )
@@ -160,7 +167,7 @@ def test_required_string_whitespace_only_is_rejected():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate",
             json={"title": "   ", "description": "Desc", "priority": "low"},
         )
@@ -173,7 +180,7 @@ def test_wrong_python_type_is_rejected():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate",
             json={"title": 123, "description": "Desc", "priority": "low"},
         )
@@ -218,7 +225,7 @@ def test_invalid_allowed_value_is_rejected():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate",
             json={"title": "A", "description": "Desc", "priority": "urgent"},
         )
@@ -245,7 +252,7 @@ def test_valid_input_succeeds_and_trims_strings():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response_ok = client.post(
+        response_ok = _post(client,
             "/api/_test/validate",
             json={
                 "title": "  Hello  ",
@@ -266,7 +273,7 @@ def test_multiple_invalid_fields_return_multiple_details_without_echoing_values(
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate",
             json={
                 "title": " ",
@@ -290,7 +297,7 @@ def test_strict_mode_rejects_unknown_field():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate",
             json={
                 "title": "A",
@@ -308,7 +315,7 @@ def test_strict_false_allows_unknown_field():
     app = _create_validation_test_app()
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate?strict=false",
             json={
                 "title": "A",
@@ -327,7 +334,7 @@ def test_validation_error_responses_include_request_id_and_are_logged(caplog):
     caplog.set_level(logging.INFO)
 
     with app.test_client() as client:
-        response = client.post(
+        response = _post(client,
             "/api/_test/validate",
             data="",
             content_type="application/json",

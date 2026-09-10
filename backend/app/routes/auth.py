@@ -1,7 +1,8 @@
 from functools import wraps
 
 import psycopg
-from flask import Blueprint, current_app, g, jsonify, request, session
+from flask import Blueprint, current_app, g, request, session
+from flask_wtf.csrf import generate_csrf
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.db import get_db_connection
@@ -9,6 +10,11 @@ from app.responses import error_response, success_response, validation_error_res
 from app.validation import parse_json_request, validate_object
 
 auth_bp = Blueprint("auth", __name__)
+
+
+@auth_bp.route("/api/auth/csrf", methods=["GET"])
+def csrf_token():
+    return success_response({"data": {"csrf_token": generate_csrf()}}, status_code=200)
 
 
 def _safe_user_row(user_row):

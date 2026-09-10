@@ -71,7 +71,7 @@ def test_allowed_preflight_request_has_expected_policy(healthy_app):
             headers={
                 "Origin": "http://localhost:5173",
                 "Access-Control-Request-Method": "GET",
-                "Access-Control-Request-Headers": "Content-Type,Authorization,X-Request-ID",
+                "Access-Control-Request-Headers": "Content-Type,Authorization,X-Request-ID,X-CSRF-Token",
             },
         )
 
@@ -84,10 +84,12 @@ def test_allowed_preflight_request_has_expected_policy(healthy_app):
     assert "POST" in allow_methods
     assert "PATCH" in allow_methods
     assert "DELETE" in allow_methods
+    assert "PUT" in allow_methods
     assert "OPTIONS" in allow_methods
     assert "Content-Type" in allow_headers
     assert "Authorization" in allow_headers
     assert "X-Request-ID" in allow_headers
+    assert "X-CSRF-Token" in allow_headers
 
 
 def test_unconfigured_preflight_request_is_not_granted_access(healthy_app):

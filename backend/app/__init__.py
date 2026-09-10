@@ -4,11 +4,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
+from flask_wtf.csrf import CSRFProtect
 
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 LOCAL_ENV_FILE = BACKEND_DIR / ".env"
 DEFAULT_ALLOWED_ORIGINS = ["http://localhost:5173"]
+csrf = CSRFProtect()
 
 
 def _parse_bool(value: str | None, default: bool = False) -> bool:
@@ -48,6 +50,7 @@ def create_app():
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = _parse_bool(os.getenv("SESSION_COOKIE_SECURE"), default=False)
+    app.config["WTF_CSRF_HEADERS"] = ["X-CSRF-Token"]
     allowed_origins = parse_allowed_origins()
 
     CORS(
@@ -56,8 +59,8 @@ def create_app():
             r"/api/*": {
                 "origins": allowed_origins,
                 "supports_credentials": True,
-                "allow_headers": ["Content-Type", "Authorization", "X-Request-ID"],
-                "methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+                "allow_headers": ["Content-Type", "Authorization", "X-Request-ID", "X-CSRF-Token"],
+                "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                 "expose_headers": ["X-Request-ID"],
                 "always_send": False,
             }
@@ -67,6 +70,7 @@ def create_app():
     from app.request_handling import register_request_handling
 
     register_request_handling(app)
+    csrf.init_app(app)
 
     from app.cli import register_cli
 

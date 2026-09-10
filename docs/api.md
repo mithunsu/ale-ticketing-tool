@@ -44,4 +44,20 @@ All responses return JSON with appropriate HTTP status codes:
 
 ## CORS
 
-CORS is not yet enabled. Will be configured in Phase 1 when the frontend begins calling the backend.
+CORS allows the configured frontend origin with credentials. Local browser development uses `http://localhost:5173` for the frontend and `http://localhost:5000` for the backend.
+
+## Session and CSRF
+
+Call `GET /api/auth/csrf` before login. The response contains a session-backed token:
+
+```json
+{
+  "data": {
+    "csrf_token": "<token>"
+  }
+}
+```
+
+Send the token in `X-CSRF-Token` for `POST`, `PUT`, `PATCH`, and `DELETE`, including login, logout, password change, and admin user creation. `GET`, `HEAD`, and `OPTIONS` are exempt. Missing or invalid tokens return JSON `403` responses with code `CSRF_TOKEN_INVALID`; CSRF failures still include `X-Request-ID`.
+
+Login rotates the session by clearing the pre-login session before setting the authenticated user, so clients should fetch a fresh token after login. Password change also clears the session and requires a fresh token before the next login. CSRF state is not persisted in PostgreSQL.

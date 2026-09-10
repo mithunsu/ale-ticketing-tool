@@ -3,8 +3,10 @@ import time
 import uuid
 
 from flask import current_app, g, jsonify, request
+from flask_wtf.csrf import CSRFError
 from werkzeug.exceptions import InternalServerError, MethodNotAllowed, NotFound
 
+from app.responses import error_response
 
 REQUEST_ID_HEADER = "X-Request-ID"
 MAX_REQUEST_ID_LENGTH = 128
@@ -89,6 +91,14 @@ def register_request_handling(app):
                 "The requested resource does not exist.",
             )
         ), 404
+
+    @app.errorhandler(CSRFError)
+    def _handle_csrf_error(_error):
+        return error_response(
+            code="CSRF_TOKEN_INVALID",
+            message="The CSRF token is missing or invalid.",
+            status_code=403,
+        )
 
     @app.errorhandler(MethodNotAllowed)
     def _handle_method_not_allowed(_error):

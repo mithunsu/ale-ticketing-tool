@@ -5,6 +5,7 @@ import pytest
 from werkzeug.security import check_password_hash
 
 from app import create_app
+from conftest import csrf_headers
 
 
 class _StubCursor:
@@ -91,7 +92,7 @@ def test_admin_creates_user_with_one_time_temporary_password(monkeypatch, caplog
 
     with app.test_client() as client:
         _authenticate(client)
-        response = client.post("/api/admin/users", json=_valid_payload(), headers={"Origin": "http://localhost:5173"})
+        response = client.post("/api/admin/users", json=_valid_payload(), headers=csrf_headers(client, Origin="http://localhost:5173"))
 
     assert response.status_code == 201
     payload = response.get_json()["data"]
@@ -128,7 +129,7 @@ def test_admin_can_provision_every_allowed_role(monkeypatch, role):
 
     with app.test_client() as client:
         _authenticate(client)
-        response = client.post("/api/admin/users", json=_valid_payload(role=role))
+        response = client.post("/api/admin/users", json=_valid_payload(role=role), headers=csrf_headers(client))
 
     assert response.status_code == 201
     assert cursor.executed[0][1][2] == role
@@ -140,7 +141,7 @@ def test_non_admin_cannot_provision_users(monkeypatch, role):
 
     with app.test_client() as client:
         _authenticate(client)
-        response = client.post("/api/admin/users", json=_valid_payload())
+        response = client.post("/api/admin/users", json=_valid_payload(), headers=csrf_headers(client))
 
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "FORBIDDEN"
@@ -151,7 +152,7 @@ def test_unauthenticated_request_is_rejected(monkeypatch):
     app, cursor, _connection = _app_with_current_user(monkeypatch)
 
     with app.test_client() as client:
-        response = client.post("/api/admin/users", json=_valid_payload())
+        response = client.post("/api/admin/users", json=_valid_payload(), headers=csrf_headers(client))
 
     assert response.status_code == 401
     assert response.get_json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
@@ -178,7 +179,7 @@ def test_invalid_creation_data_is_rejected(monkeypatch, payload, field):
 
     with app.test_client() as client:
         _authenticate(client)
-        response = client.post("/api/admin/users", json=payload)
+        response = client.post("/api/admin/users", json=payload, headers=csrf_headers(client))
 
     assert response.status_code == 400
     assert field in response.get_json()["error"]["details"]
@@ -192,7 +193,7 @@ def test_duplicate_email_is_safe_conflict(monkeypatch):
 
     with app.test_client() as client:
         _authenticate(client)
-        response = client.post("/api/admin/users", json=_valid_payload())
+        response = client.post("/api/admin/users", json=_valid_payload(), headers=csrf_headers(client))
 
     assert response.status_code == 409
     assert response.get_json()["error"] == {
@@ -209,7 +210,7 @@ def test_database_error_is_masked_without_credential_leak(monkeypatch):
 
     with app.test_client() as client:
         _authenticate(client)
-        response = client.post("/api/admin/users", json=_valid_payload())
+        response = client.post("/api/admin/users", json=_valid_payload(), headers=csrf_headers(client))
 
     assert response.status_code == 500
     assert response.get_json()["error"]["code"] == "INTERNAL_SERVER_ERROR"

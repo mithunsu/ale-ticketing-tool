@@ -16,3 +16,17 @@ if backend_path not in sys.path:
 def _set_test_secret(monkeypatch):
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-secret-key-1234567890")
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+
+
+def get_csrf_token(client):
+    response = client.get("/api/auth/csrf")
+    assert response.status_code == 200
+    token = response.get_json()["data"]["csrf_token"]
+    assert token
+    return token
+
+
+def csrf_headers(client, **extra_headers):
+    headers = {"X-CSRF-Token": get_csrf_token(client)}
+    headers.update(extra_headers)
+    return headers
