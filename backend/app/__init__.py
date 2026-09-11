@@ -77,10 +77,11 @@ def create_app():
     register_cli(app)
 
     # Register blueprints
-    from app.routes import admin_users_bp, auth_bp, health_bp
+    from app.routes import admin_users_bp, auth_bp, health_bp, tickets_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_users_bp)
+    app.register_blueprint(tickets_bp)
 
     return app

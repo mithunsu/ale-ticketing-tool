@@ -70,6 +70,7 @@ CREATE TABLE tickets (
 
 	title VARCHAR(200) NOT NULL,
 	description TEXT NOT NULL,
+	setup_snapshot JSONB NOT NULL,
 
 	-- Allowed values: low, medium, high, critical.  Defaults to medium.
 	priority VARCHAR(20) NOT NULL DEFAULT 'medium',
@@ -230,7 +231,9 @@ CREATE TABLE ticket_history (
 	-- RESTRICT prevents deleting a user whose actions are part of the audit trail.
 	changed_by UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
 
-	old_status VARCHAR(30) NOT NULL,
+	-- TICKET_CREATED records the initial New state; STATUS_CHANGED records later transitions.
+	action VARCHAR(50) NOT NULL DEFAULT 'STATUS_CHANGED',
+	old_status VARCHAR(30),
 	new_status VARCHAR(30) NOT NULL,
 
 	-- Immutable creation timestamp. No updated_at because history rows are never edited.
@@ -238,7 +241,7 @@ CREATE TABLE ticket_history (
 
 	CONSTRAINT ticket_history_old_status_check
 		CHECK (
-			old_status IN (
+			old_status IS NULL OR old_status IN (
 				'New',
 				'Open',
 				'In Progress',
@@ -259,7 +262,14 @@ CREATE TABLE ticket_history (
 		),
 
 	CONSTRAINT ticket_history_status_changed_check
-		CHECK (old_status <> new_status)
+		CHECK (
+			(action = 'TICKET_CREATED' AND old_status IS NULL AND new_status = 'New')
+			OR
+			(action = 'STATUS_CHANGED' AND old_status IS NOT NULL AND old_status <> new_status)
+		),
+
+	CONSTRAINT ticket_history_action_check
+		CHECK (action IN ('TICKET_CREATED', 'STATUS_CHANGED'))
 );
 
 -- Composite index for retrieving one ticket's status history in chronological order.
