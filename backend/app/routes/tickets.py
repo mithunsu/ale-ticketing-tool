@@ -141,3 +141,157 @@ def create_ticket():
         "updated_at": _serialize_timestamp(updated_at),
     }
     return success_response({"data": {"ticket": ticket}}, status_code=201)
+
+
+@tickets_bp.route("/api/tickets", methods=["GET"])
+@require_auth
+def list_tickets():
+    current_user_role = g.current_user["role"]
+    if current_user_role not in ALLOWED_ROLES:
+        return error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to perform this action.",
+            status_code=403,
+        )
+
+    errors = {}
+    raw_page = request.args.get("page")
+    raw_limit = request.args.get("limit")
+
+    page = 1
+    if raw_page is not None:
+        try:
+            page = int(raw_page)
+            if page < 1:
+                errors["page"] = "Must be an integer greater than or equal to 1."
+        except (ValueError, TypeError):
+            errors["page"] = "Must be an integer."
+
+    limit = 10
+    if raw_limit is not None:
+        try:
+            limit = int(raw_limit)
+            if limit < 1 or limit > 20:
+                errors["limit"] = "Must be an integer between 1 and 20."
+        except (ValueError, TypeError):
+            errors["limit"] = "Must be an integer."
+
+    if errors:
+        return validation_error_response(details=errors)
+
+    offset = (page - 1) * limit
+
+    base_query = """
+        SELECT
+            t.id,
+            t.ticket_number,
+            t.title,
+            t.description,
+            t.priority,
+            t.status,
+            t.requester_id,
+            u.name AS requester_name,
+            u.email AS requester_email,
+            t.assigned_to,
+            t.setup_snapshot,
+            t.due_date,
+            t.resolution,
+            t.created_at,
+            t.updated_at,
+            t.closed_at
+        FROM tickets t
+        INNER JOIN users u ON t.requester_id = u.id
+    """
+
+    if current_user_role == "requester":
+        count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s;"
+        count_params = (str(g.current_user["id"]),)
+        query = base_query + "\n        WHERE t.requester_id = %s\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+        params = (str(g.current_user["id"]), limit, offset)
+    else:
+        count_query = "SELECT COUNT(*) FROM tickets;"
+        count_params = None
+        query = base_query + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+        params = (limit, offset)
+
+    try:
+        with get_db_connection() as connection:
+            with connection.cursor() as cursor:
+                if count_params is not None:
+                    cursor.execute(count_query, count_params)
+                else:
+                    cursor.execute(count_query)
+                count_row = cursor.fetchone()
+                total = count_row[0] if count_row is not None else 0
+
+                if params is not None:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                rows = cursor.fetchall()
+    except psycopg.Error:
+        current_app.logger.error("Unable to list tickets.")
+        return error_response(
+            code="INTERNAL_SERVER_ERROR",
+            message="An unexpected server error occurred.",
+            status_code=500,
+        )
+
+    total_pages = 0 if total == 0 else (total + limit - 1) // limit
+
+    tickets_list = []
+    for row in rows:
+        (
+            ticket_id,
+            ticket_number,
+            title,
+            description,
+            priority,
+            status,
+            requester_id,
+            requester_name,
+            requester_email,
+            assigned_to,
+            setup_snapshot,
+            due_date,
+            resolution,
+            created_at,
+            updated_at,
+            closed_at,
+        ) = row
+
+        tickets_list.append(
+            {
+                "id": str(ticket_id),
+                "ticket_number": ticket_number,
+                "title": title,
+                "description": description,
+                "priority": priority.title() if priority else priority,
+                "status": status,
+                "requester_id": str(requester_id),
+                "requester_name": requester_name,
+                "requester_email": requester_email,
+                "assigned_to": str(assigned_to) if assigned_to is not None else None,
+                "setup_snapshot": setup_snapshot,
+                "due_date": _serialize_timestamp(due_date) if due_date is not None else None,
+                "resolution": resolution,
+                "created_at": _serialize_timestamp(created_at),
+                "updated_at": _serialize_timestamp(updated_at),
+                "closed_at": _serialize_timestamp(closed_at) if closed_at is not None else None,
+            }
+        )
+
+    return success_response(
+        {
+            "data": {
+                "tickets": tickets_list,
+                "pagination": {
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "total_pages": total_pages,
+                },
+            }
+        },
+        status_code=200,
+    )
