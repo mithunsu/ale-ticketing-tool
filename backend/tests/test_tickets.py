@@ -8,9 +8,10 @@ from conftest import csrf_headers
 
 
 class _StubCursor:
-    def __init__(self, ticket=None, tickets=None, count=None, error_on_history=None):
+    def __init__(self, ticket=None, tickets=None, history=None, count=None, error_on_history=None):
         self.ticket = ticket
         self.tickets = tickets if tickets is not None else []
+        self.history = history if history is not None else []
         self.count = count if count is not None else len(self.tickets)
         self.error_on_history = error_on_history
         self.executed = []
@@ -34,6 +35,8 @@ class _StubCursor:
         return self.ticket
 
     def fetchall(self):
+        if "TICKET_HISTORY" in self._last_query.upper():
+            return self.history
         return self.tickets
 
 
@@ -257,9 +260,14 @@ def test_real_postgres_rollback_when_history_insert_fails(postgres_disposable_db
     with psycopg.connect(**db_config) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM tickets WHERE title = %s;", ("Rollback Test Ticket",))
-            ticket_count = cur.fetchone()[0]
+            res_ticket = cur.fetchone()
+            assert res_ticket is not None
+            ticket_count = res_ticket[0]
+
             cur.execute("SELECT COUNT(*) FROM ticket_history WHERE action = 'TICKET_CREATED';")
-            history_count = cur.fetchone()[0]
+            res_history = cur.fetchone()
+            assert res_history is not None
+            history_count = res_history[0]
 
     assert ticket_count == 0
     assert history_count == 0
@@ -293,6 +301,30 @@ def _sample_ticket_row(
         ts,
         None,
     )
+
+
+def _sample_history_row(
+    history_id="h1f7b022-7772-4d2a-a92c-0e9e110d9f01",
+    action="TICKET_CREATED",
+    old_status=None,
+    new_status="New",
+    changed_by="user-1",
+    actor_name="Alice Requester",
+    actor_email="alice@example.com",
+    created_at=None,
+):
+    ts = created_at or datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)
+    return (
+        history_id,
+        action,
+        old_status,
+        new_status,
+        changed_by,
+        actor_name,
+        actor_email,
+        ts,
+    )
+
 
 
 def test_unauthenticated_get_tickets_is_rejected():
@@ -658,3 +690,247 @@ def test_requesting_valid_page_beyond_total_pages(monkeypatch):
         "total": 15,
         "total_pages": 2,
     }
+
+
+def test_unauthenticated_get_ticket_by_id_is_rejected():
+    app = create_app()
+
+    with app.test_client() as client:
+        response = client.get("/api/tickets/c1f7b022-7772-4d2a-a92c-0e9e110d9f01")
+
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    "invalid_uuid",
+    [
+        "not-a-valid-uuid",
+        "12345",
+        "c1f7b022-7772-4d2a-a92c",
+        "c1f7b022-7772-4d2a-a92c-0e9e110d9f01-extra",
+    ],
+)
+def test_malformed_ticket_uuid_returns_400(monkeypatch, invalid_uuid):
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester")
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{invalid_uuid}")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "ticket_id" in response.get_json()["error"]["details"]
+    assert cursor.executed == []
+
+
+def test_valid_uuid_nonexistent_ticket_returns_404(monkeypatch):
+    cursor = _StubCursor(ticket=None)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets/c1f7b022-7772-4d2a-a92c-0e9e110d9f01")
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "TICKET_NOT_FOUND"
+    assert len(cursor.executed) == 1
+
+
+def test_requester_views_own_ticket_with_display_info_and_history(monkeypatch):
+    ticket_id = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+    row = _sample_ticket_row(
+        ticket_id=ticket_id,
+        requester_id="user-1",
+        requester_name="Alice Requester",
+        requester_email="alice@example.com",
+    )
+    h_row = _sample_history_row(
+        history_id="h1f7b022-7772-4d2a-a92c-0e9e110d9f01",
+        action="TICKET_CREATED",
+        old_status=None,
+        new_status="New",
+        changed_by="user-1",
+        actor_name="Alice Requester",
+        actor_email="alice@example.com",
+    )
+    cursor = _StubCursor(ticket=row, history=[h_row])
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{ticket_id}")
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    ticket = data["ticket"]
+    assert ticket["id"] == ticket_id
+    assert ticket["requester_id"] == "user-1"
+    assert ticket["requester_name"] == "Alice Requester"
+    assert ticket["requester_email"] == "alice@example.com"
+    assert ticket["title"] == "Router issue"
+    assert ticket["priority"] == "High"
+    assert ticket["status"] == "New"
+    assert ticket["assigned_to"] is None
+
+    history = data["history"]
+    assert len(history) == 1
+    assert history[0] == {
+        "id": "h1f7b022-7772-4d2a-a92c-0e9e110d9f01",
+        "action": "TICKET_CREATED",
+        "old_status": None,
+        "new_status": "New",
+        "changed_by": "user-1",
+        "actor_name": "Alice Requester",
+        "actor_email": "alice@example.com",
+        "created_at": "2026-09-11T10:00:00+00:00",
+    }
+
+    assert len(cursor.executed) == 2
+    ticket_query, ticket_params = cursor.executed[0]
+    assert "INNER JOIN users u ON t.requester_id = u.id" in ticket_query
+    assert "WHERE t.id = %s AND t.requester_id = %s" in ticket_query
+    assert ticket_params == (ticket_id, "user-1")
+
+    history_query, history_params = cursor.executed[1]
+    assert "FROM ticket_history th" in history_query
+    assert "LEFT JOIN users u ON th.changed_by = u.id" in history_query
+    assert "WHERE th.ticket_id = %s" in history_query
+    assert history_params == (ticket_id,)
+
+
+def test_requester_viewing_another_requesters_ticket_returns_404_not_403(monkeypatch):
+    ticket_id = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+    # Query scoped to requester (t.id = %s AND t.requester_id = %s) returns None
+    cursor = _StubCursor(ticket=None)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{ticket_id}")
+
+    assert response.status_code == 404
+    assert response.status_code != 403
+    assert response.get_json()["error"]["code"] == "TICKET_NOT_FOUND"
+
+
+def test_history_query_not_executed_when_ticket_lookup_fails(monkeypatch):
+    ticket_id = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+    cursor = _StubCursor(ticket=None)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{ticket_id}")
+
+    assert response.status_code == 404
+    assert len(cursor.executed) == 1
+    assert "ticket_history" not in cursor.executed[0][0].lower()
+
+
+@pytest.mark.parametrize("role", ["support_engineer", "manager", "admin"])
+def test_privileged_roles_can_view_any_ticket_detail(monkeypatch, role):
+    ticket_id = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+    row = _sample_ticket_row(
+        ticket_id=ticket_id,
+        requester_id="other-user",
+        requester_name="Other User",
+        requester_email="other@example.com",
+    )
+    cursor = _StubCursor(ticket=row, history=[])
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role=role, cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{ticket_id}")
+
+    assert response.status_code == 200
+    ticket = response.get_json()["data"]["ticket"]
+    assert ticket["id"] == ticket_id
+    assert ticket["requester_id"] == "other-user"
+
+    ticket_query, ticket_params = cursor.executed[0]
+    assert "WHERE t.id = %s;" in ticket_query
+    assert "t.requester_id = %s" not in ticket_query
+    assert ticket_params == (ticket_id,)
+
+
+def test_ticket_history_ordered_chronologically_asc(monkeypatch):
+    ticket_id = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+    h1 = _sample_history_row(
+        history_id="h-1",
+        action="TICKET_CREATED",
+        created_at=datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc),
+    )
+    h2 = _sample_history_row(
+        history_id="h-2",
+        action="STATUS_CHANGED",
+        old_status="New",
+        new_status="Open",
+        created_at=datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc),
+    )
+    cursor = _StubCursor(
+        ticket=_sample_ticket_row(ticket_id=ticket_id),
+        history=[h1, h2],
+    )
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="support_engineer", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{ticket_id}")
+
+    assert response.status_code == 200
+    history = response.get_json()["data"]["history"]
+    assert len(history) == 2
+    assert history[0]["id"] == "h-1"
+    assert history[1]["id"] == "h-2"
+
+    history_query, _history_params = cursor.executed[1]
+    assert "ORDER BY th.created_at ASC, th.id ASC" in history_query
+
+
+def test_empty_ticket_history_returns_empty_list(monkeypatch):
+    ticket_id = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+    cursor = _StubCursor(
+        ticket=_sample_ticket_row(ticket_id=ticket_id),
+        history=[],
+    )
+    app, _cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{ticket_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["history"] == []
+
+
+def test_no_sensitive_user_fields_in_ticket_detail_or_history(monkeypatch):
+    ticket_id = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+    cursor = _StubCursor(
+        ticket=_sample_ticket_row(ticket_id=ticket_id),
+        history=[_sample_history_row()],
+    )
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get(f"/api/tickets/{ticket_id}")
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    sensitive_keys = {
+        "password_hash",
+        "must_change_password",
+        "sso_id",
+        "last_login_at",
+        "auth_provider",
+    }
+    for key in sensitive_keys:
+        assert key not in data["ticket"]
+        assert key not in data["history"][0]
+
+    for execution in cursor.executed:
+        query = execution[0]
+        for key in sensitive_keys:
+            assert key not in query

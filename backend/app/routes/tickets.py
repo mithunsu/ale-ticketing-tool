@@ -1,3 +1,5 @@
+import uuid
+
 import psycopg
 from flask import Blueprint, current_app, g, request
 from psycopg.types.json import Jsonb
@@ -35,6 +37,15 @@ SETUP_SNAPSHOT_SCHEMA = {
 
 def _serialize_timestamp(value):
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _is_valid_uuid(value: str) -> bool:
+    try:
+        parsed = uuid.UUID(str(value))
+        return str(parsed) == str(value).lower()
+    except (ValueError, AttributeError, TypeError):
+        return False
+
 
 
 @tickets_bp.route("/api/tickets", methods=["POST"])
@@ -291,6 +302,162 @@ def list_tickets():
                     "total": total,
                     "total_pages": total_pages,
                 },
+            }
+        },
+        status_code=200,
+    )
+
+
+@tickets_bp.route("/api/tickets/<ticket_id>", methods=["GET"])
+@require_auth
+def get_ticket(ticket_id):
+    current_user_role = g.current_user["role"]
+    if current_user_role not in ALLOWED_ROLES:
+        return error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to perform this action.",
+            status_code=403,
+        )
+
+    if not _is_valid_uuid(ticket_id):
+        return validation_error_response(details={"ticket_id": "Must be a valid UUID."})
+
+    ticket_query = """
+        SELECT
+            t.id,
+            t.ticket_number,
+            t.title,
+            t.description,
+            t.priority,
+            t.status,
+            t.requester_id,
+            u.name AS requester_name,
+            u.email AS requester_email,
+            t.assigned_to,
+            t.setup_snapshot,
+            t.due_date,
+            t.resolution,
+            t.created_at,
+            t.updated_at,
+            t.closed_at
+        FROM tickets t
+        INNER JOIN users u ON t.requester_id = u.id
+    """
+
+    if current_user_role == "requester":
+        ticket_query += "\n        WHERE t.id = %s AND t.requester_id = %s;"
+        ticket_params = (ticket_id, str(g.current_user["id"]))
+    else:
+        ticket_query += "\n        WHERE t.id = %s;"
+        ticket_params = (ticket_id,)
+
+    history_query = """
+        SELECT
+            th.id,
+            th.action,
+            th.old_status,
+            th.new_status,
+            th.changed_by,
+            u.name AS actor_name,
+            u.email AS actor_email,
+            th.created_at
+        FROM ticket_history th
+        LEFT JOIN users u ON th.changed_by = u.id
+        WHERE th.ticket_id = %s
+        ORDER BY th.created_at ASC, th.id ASC;
+    """
+
+    try:
+        with get_db_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(ticket_query, ticket_params)
+                ticket_row = cursor.fetchone()
+
+                if ticket_row is None:
+                    return error_response(
+                        code="TICKET_NOT_FOUND",
+                        message="The requested ticket does not exist.",
+                        status_code=404,
+                    )
+
+                cursor.execute(history_query, (ticket_id,))
+                history_rows = cursor.fetchall()
+    except psycopg.Error:
+        current_app.logger.error("Unable to get ticket.")
+        return error_response(
+            code="INTERNAL_SERVER_ERROR",
+            message="An unexpected server error occurred.",
+            status_code=500,
+        )
+
+    (
+        t_id,
+        ticket_number,
+        title,
+        description,
+        priority,
+        status,
+        requester_id,
+        requester_name,
+        requester_email,
+        assigned_to,
+        setup_snapshot,
+        due_date,
+        resolution,
+        created_at,
+        updated_at,
+        closed_at,
+    ) = ticket_row
+
+    ticket_data = {
+        "id": str(t_id),
+        "ticket_number": ticket_number,
+        "title": title,
+        "description": description,
+        "priority": priority.title() if priority else priority,
+        "status": status,
+        "requester_id": str(requester_id),
+        "requester_name": requester_name,
+        "requester_email": requester_email,
+        "assigned_to": str(assigned_to) if assigned_to is not None else None,
+        "setup_snapshot": setup_snapshot,
+        "due_date": _serialize_timestamp(due_date) if due_date is not None else None,
+        "resolution": resolution,
+        "created_at": _serialize_timestamp(created_at),
+        "updated_at": _serialize_timestamp(updated_at),
+        "closed_at": _serialize_timestamp(closed_at) if closed_at is not None else None,
+    }
+
+    history_data = []
+    for h_row in history_rows:
+        (
+            h_id,
+            action,
+            old_status,
+            new_status,
+            changed_by,
+            actor_name,
+            actor_email,
+            h_created_at,
+        ) = h_row
+        history_data.append(
+            {
+                "id": str(h_id),
+                "action": action,
+                "old_status": old_status,
+                "new_status": new_status,
+                "changed_by": str(changed_by) if changed_by is not None else None,
+                "actor_name": actor_name,
+                "actor_email": actor_email,
+                "created_at": _serialize_timestamp(h_created_at),
+            }
+        )
+
+    return success_response(
+        {
+            "data": {
+                "ticket": ticket_data,
+                "history": history_data,
             }
         },
         status_code=200,
