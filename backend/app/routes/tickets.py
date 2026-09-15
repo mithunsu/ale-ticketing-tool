@@ -13,6 +13,13 @@ from app.validation import parse_json_request, validate_object
 tickets_bp = Blueprint("tickets", __name__)
 
 ALLOWED_ROLES = ("requester", "support_engineer", "manager", "admin")
+VALID_TICKET_STATUS_VALUES = ("New", "Open", "In Progress", "Resolved")
+ALLOWED_STATUS_TRANSITIONS = {
+    ("New", "Open"),
+    ("Open", "In Progress"),
+    ("In Progress", "Resolved"),
+    ("Resolved", "In Progress"),
+}
 PRIORITY_VALUES = ("Low", "Medium", "High", "Critical")
 PRIORITY_TO_DATABASE_VALUE = {priority: priority.lower() for priority in PRIORITY_VALUES}
 SETUP_SNAPSHOT_SCHEMA = {
@@ -54,6 +61,14 @@ def _serialize_assignment(ticket_id, assigned_to, updated_at):
         "updated_at": _serialize_timestamp(updated_at),
     }
 
+
+def _serialize_status_ticket(ticket_id, status, assigned_to, updated_at):
+    return {
+        "id": str(ticket_id),
+        "status": status,
+        "assigned_to": str(assigned_to) if assigned_to is not None else None,
+        "updated_at": _serialize_timestamp(updated_at),
+    }
 
 
 @tickets_bp.route("/api/tickets", methods=["POST"])
@@ -468,6 +483,135 @@ def get_ticket(ticket_id):
                 "history": history_data,
             }
         },
+        status_code=200,
+    )
+
+
+@tickets_bp.route("/api/tickets/<ticket_id>/status", methods=["PATCH"])
+@require_auth
+def update_ticket_status(ticket_id):
+    current_user = g.current_user
+    if current_user["role"] == "requester":
+        return error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to perform this action.",
+            status_code=403,
+        )
+
+    if not _is_valid_uuid(ticket_id):
+        return validation_error_response(details={"ticket_id": "Must be a valid UUID."})
+
+    payload, parse_error = parse_json_request(request)
+    if parse_error is not None:
+        return parse_error
+    assert payload is not None
+
+    normalized, errors = validate_object(payload, {"status": {"required": True, "type": str}})
+    if errors is not None:
+        return validation_error_response(details=errors)
+    assert normalized is not None
+
+    target_status = normalized["status"]
+    if target_status not in VALID_TICKET_STATUS_VALUES:
+        return validation_error_response(details={"status": "Unsupported ticket status."})
+
+    current_user_id = str(current_user["id"])
+
+    try:
+        with get_db_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;",
+                    (ticket_id,),
+                )
+                ticket_row = cursor.fetchone()
+                if ticket_row is None:
+                    return error_response(
+                        code="TICKET_NOT_FOUND",
+                        message="The requested ticket does not exist.",
+                        status_code=404,
+                    )
+
+                ticket_id_db, current_status, assigned_to, updated_at = ticket_row
+                if current_user["role"] == "support_engineer":
+                    if assigned_to is None or str(assigned_to) != current_user_id:
+                        return error_response(
+                            code="FORBIDDEN",
+                            message="You do not have permission to perform this action.",
+                            status_code=403,
+                        )
+
+                if target_status == current_status:
+                    return success_response(
+                        {"data": {"ticket": _serialize_status_ticket(ticket_id_db, current_status, assigned_to, updated_at)}},
+                        status_code=200,
+                    )
+
+                if (current_status, target_status) not in ALLOWED_STATUS_TRANSITIONS:
+                    return validation_error_response(details={"status": "Invalid status transition."})
+
+                if current_user["role"] == "support_engineer":
+                    cursor.execute(
+                        "UPDATE tickets SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND status = %s AND assigned_to = %s RETURNING id, status, assigned_to, updated_at;",
+                        (target_status, ticket_id, current_status, current_user_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE tickets SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND status = %s RETURNING id, status, assigned_to, updated_at;",
+                        (target_status, ticket_id, current_status),
+                    )
+
+                updated_ticket = cursor.fetchone()
+                if updated_ticket is None:
+                    cursor.execute(
+                        "SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;",
+                        (ticket_id,),
+                    )
+                    current_ticket = cursor.fetchone()
+                    if current_ticket is None:
+                        return error_response(
+                            code="TICKET_NOT_FOUND",
+                            message="The requested ticket does not exist.",
+                            status_code=404,
+                        )
+
+                    if current_user["role"] == "support_engineer" and str(current_ticket[2]) != current_user_id:
+                        return error_response(
+                            code="FORBIDDEN",
+                            message="You do not have permission to perform this action.",
+                            status_code=403,
+                        )
+
+                    return error_response(
+                        code="CONFLICT",
+                        message="The ticket was updated by another request.",
+                        status_code=409,
+                    )
+
+                cursor.execute(
+                    """
+                    INSERT INTO ticket_history (
+                        ticket_id, changed_by, action, old_status, new_status
+                    )
+                    VALUES (%s, %s, 'STATUS_CHANGED', %s, %s);
+                    """,
+                    (str(updated_ticket[0]), current_user_id, current_status, target_status),
+                )
+            connection.commit()
+    except psycopg.Error:
+        current_app.logger.error("Unable to update ticket status.")
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+        return error_response(
+            code="INTERNAL_SERVER_ERROR",
+            message="An unexpected server error occurred.",
+            status_code=500,
+        )
+
+    return success_response(
+        {"data": {"ticket": _serialize_status_ticket(*updated_ticket)}},
         status_code=200,
     )
 

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
 from app import create_app
 from conftest import csrf_headers
@@ -950,6 +951,38 @@ def test_no_sensitive_user_fields_in_ticket_detail_or_history(monkeypatch):
 TICKET_ID = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
 CURRENT_USER_ID = "d2f7b022-7772-4d2a-a92c-0e9e110d9f01"
 OTHER_USER_ID = "e3f7b022-7772-4d2a-a92c-0e9e110d9f01"
+STATUS_TRANSITIONS = {
+    ("New", "Open"),
+    ("Open", "In Progress"),
+    ("In Progress", "Resolved"),
+    ("Resolved", "In Progress"),
+}
+
+
+def _status_ticket(status="New", assigned_to=None, updated_at=None):
+    return (
+        TICKET_ID,
+        status,
+        assigned_to,
+        updated_at or datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc),
+    )
+
+
+def _status_history_row(ticket_id=TICKET_ID, old_status="New", new_status="Open", changed_by=CURRENT_USER_ID):
+    return (
+        "history-1",
+        "STATUS_CHANGED",
+        old_status,
+        new_status,
+        changed_by,
+        "Actor",
+        "actor@example.com",
+        datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc),
+    )
+
+
+def _status_user(role="requester", user_id=CURRENT_USER_ID):
+    return (user_id, "Actor", "actor@example.com", role, "active", "hash", False)
 
 
 def _assignment_ticket(assigned_to=None, updated_at=None):
@@ -981,13 +1014,13 @@ def _assignment_headers(client):
     return csrf_headers(client)
 
 
-def test_unauthenticated_user_cannot_update_assignment():
+def test_unauthenticated_user_cannot_update_status():
     app = create_app()
 
     with app.test_client() as client:
         response = client.patch(
-            f"/api/tickets/{TICKET_ID}/assignment",
-            json={"assigned_to": OTHER_USER_ID},
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
             headers=_assignment_headers(client),
         )
 
@@ -995,20 +1028,300 @@ def test_unauthenticated_user_cannot_update_assignment():
     assert response.get_json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
-def test_requester_cannot_update_assignment(monkeypatch):
-    cursor = _StubCursor()
+def test_requester_cannot_update_status(monkeypatch):
+    cursor = _StubCursor(fetchone_results=[_status_ticket(status="New")])
     app, cursor, _connection = _app_with_assignment_user(monkeypatch, "requester", cursor)
 
     with app.test_client() as client:
         _authenticate_assignment_user(client)
         response = client.patch(
-            f"/api/tickets/{TICKET_ID}/assignment",
-            json={"assigned_to": OTHER_USER_ID},
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
             headers=_assignment_headers(client),
         )
 
     assert response.status_code == 403
     assert cursor.executed == []
+
+
+@pytest.mark.parametrize("ticket_id", ["invalid", "123", "c1f7b022-7772-4d2a-a92c"])
+def test_malformed_status_ticket_id_is_rejected(monkeypatch, ticket_id):
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", _StubCursor())
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert "ticket_id" in response.get_json()["error"]["details"]
+    assert cursor.executed == []
+
+
+def test_nonexistent_ticket_status_returns_404(monkeypatch):
+    cursor = _StubCursor(fetchone_results=[None])
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "TICKET_NOT_FOUND"
+    assert len(cursor.executed) == 1
+
+
+@pytest.mark.parametrize("body", [{}, {"status": None}, {"status": 42}, {"status": "Closed"}, {"status": "invalid"}, {"status": "Open", "extra": True}])
+def test_invalid_status_request_body_is_rejected(monkeypatch, body):
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", _StubCursor())
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json=body,
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    details = response.get_json()["error"]["details"]
+    assert "status" in details or "extra" in details
+    assert cursor.executed == []
+
+
+@pytest.mark.parametrize(("current_status", "target_status"), [("New", "Open"), ("Open", "In Progress"), ("In Progress", "Resolved"), ("Resolved", "In Progress")])
+def test_allowed_status_transitions_succeed(monkeypatch, current_status, target_status):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status=current_status, assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            (TICKET_ID, target_status, CURRENT_USER_ID, updated_at),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": target_status},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["status"] == target_status
+    assert connection.committed is True
+    assert len(cursor.executed) == 3
+    assert "UPDATE tickets" in cursor.executed[1][0]
+    assert "WHERE id = %s AND status = %s" in cursor.executed[1][0]
+    assert cursor.executed[1][1] == (target_status, TICKET_ID, current_status, CURRENT_USER_ID)
+    assert "INSERT INTO ticket_history" in cursor.executed[2][0]
+
+
+@pytest.mark.parametrize(("current_status", "target_status"), [("New", "In Progress"), ("New", "Resolved"), ("Open", "Resolved"), ("Open", "New"), ("In Progress", "Open"), ("Resolved", "New"), ("Resolved", "Open")])
+def test_invalid_status_transitions_are_rejected(monkeypatch, current_status, target_status):
+    cursor = _StubCursor(fetchone_results=[_status_ticket(status=current_status, assigned_to=CURRENT_USER_ID)])
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": target_status},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert "status" in response.get_json()["error"]["details"]
+    assert connection.committed is False
+    assert cursor.executed == [
+        (
+            "SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;",
+            (TICKET_ID,),
+        )
+    ]
+
+
+def test_same_status_is_idempotent_without_update_or_history(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(fetchone_results=[_status_ticket(status="In Progress", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at)])
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "In Progress"},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"] == {
+        "id": TICKET_ID,
+        "status": "In Progress",
+        "assigned_to": CURRENT_USER_ID,
+        "updated_at": current_updated_at.isoformat(),
+    }
+    assert connection.committed is False
+    assert cursor.executed == [
+        ("SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;", (TICKET_ID,))
+    ]
+
+
+@pytest.mark.parametrize("role", ["support_engineer", "manager", "admin"])
+def test_privileged_roles_can_change_status(monkeypatch, role):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="New", assigned_to=CURRENT_USER_ID if role == "support_engineer" else None, updated_at=current_updated_at),
+            (TICKET_ID, "Open", (CURRENT_USER_ID if role == "support_engineer" else None), updated_at),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, role, cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["status"] == "Open"
+    assert connection.committed is True
+    assert "INSERT INTO ticket_history" in cursor.executed[-1][0]
+
+
+def test_support_engineer_cannot_change_unassigned_or_other_users_ticket(monkeypatch):
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="New", assigned_to=None),
+            _status_ticket(status="New", assigned_to=OTHER_USER_ID),
+        ]
+    )
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+
+        unassigned = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+        other_user = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+
+    assert unassigned.status_code == 403
+    assert other_user.status_code == 403
+    assert len(cursor.executed) == 2
+
+
+def test_concurrent_status_change_returns_conflict_and_no_history(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="New", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            None,
+            _status_ticket(status="Open", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 409
+    assert connection.committed is False
+    assert len(cursor.executed) >= 3
+    assert all("INSERT INTO ticket_history" not in query.lower() for query, _ in cursor.executed)
+
+
+def test_status_history_insert_rollback_reverts_status_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    user_id = test_db["user_id"]
+    db_config = test_db["config"]
+
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (name, email, role, department, status, password_hash, must_change_password) VALUES (%s, %s, %s, %s, 'active', 'hash', false) RETURNING id;",
+                ("Engineer", "engineer@example.com", "support_engineer", "Ops"),
+            )
+            engineer_id = str(cur.fetchone()[0])
+            cur.execute(
+                "INSERT INTO tickets (title, description, setup_snapshot, requester_id, status, assigned_to) VALUES (%s, %s, %s, %s, 'New', %s) RETURNING id;",
+                (
+                    "Status rollback test",
+                    "Description",
+                    Jsonb({"server_name": "lab-1", "server_ip": "10.0.0.1", "platform": "ALE", "dut": "router"}),
+                    user_id,
+                    engineer_id,
+                ),
+            )
+            ticket_id = str(cur.fetchone()[0])
+
+    trigger_sql = """
+    CREATE OR REPLACE FUNCTION _test_fail_status_history()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        IF NEW.action = 'STATUS_CHANGED' THEN
+            RAISE EXCEPTION 'Simulated status history insert failure';
+        END IF;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER _test_reject_status_history_trigger
+    BEFORE INSERT ON ticket_history
+    FOR EACH ROW
+    EXECUTE FUNCTION _test_fail_status_history();
+    """
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(trigger_sql)
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = engineer_id
+
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status",
+            json={"status": "Open"},
+            headers=csrf_headers(client),
+        )
+
+    assert response.status_code == 500
+    assert response.get_json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+
+    with psycopg.connect(**db_config) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM tickets WHERE id = %s;", (ticket_id,))
+            assert cur.fetchone()[0] == "New"
+            cur.execute("SELECT COUNT(*) FROM ticket_history WHERE ticket_id = %s AND action = 'STATUS_CHANGED';", (ticket_id,))
+            assert cur.fetchone()[0] == 0
+
+
+# assignment tests follow below
 
 
 @pytest.mark.parametrize("ticket_id", ["invalid", "123", "c1f7b022-7772-4d2a-a92c"])
