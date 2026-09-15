@@ -1,236 +1,156 @@
 # ALE Ticket Management Tool
 
-## Problem Statement
-
-The ALE (Alcatel-Lucent Enterprise) laboratory needs a streamlined way to manage support tickets and tasks. This tool provides a centralized platform for creating, tracking, and resolving laboratory support issues.
+The ALE (Alcatel-Lucent Enterprise) Ticket Management Tool is a local web
+application for creating, tracking, and resolving laboratory support tickets.
 
 ## Technology Stack
 
-| Component | Technology | Version |
-|-----------|-----------|---------|
-| Frontend | React | Latest |
-| Build Tool | Vite | Latest |
-| Language | JavaScript | ES6+ |
-| Backend | Flask | 3.0.0 |
-| Python | Python | 3.8+ |
-| Database | PostgreSQL | 13+ (Phase 1, upcoming) |
-| API | REST + JSON | HTTP/1.1 |
+| Component | Technology |
+|-----------|------------|
+| Frontend | React with Vite and JavaScript |
+| Backend | Python Flask 3 |
+| Database | PostgreSQL 16 |
+| Database driver | psycopg 3 |
+| API | REST + JSON under `/api` |
 
 ## Project Structure
 
 ```
 ale-ticketing-tool/
 ├── frontend/              # React + Vite application
-│   ├── src/
-│   ├── public/
-│   ├── package.json
-│   └── vite.config.js
-├── backend/               # Python Flask application
-│   ├── app/
-│   │   ├── __init__.py   # Application factory
-│   │   └── routes/
-│   │       ├── __init__.py
-│   │       └── health.py # Health check endpoint
-│   ├── tests/
-│   ├── run.py            # Entry point
-│   ├── requirements.txt
-│   └── .env.example
-├── database/              # Database setup files
-│   ├── schema.sql        # Table definitions (Database Foundation milestone)
-│   └── seed.sql          # Sample data (Database Foundation milestone)
-├── docs/                  # Project documentation
-│   ├── architecture.md
-│   ├── api.md
-│   ├── database.md
-│   ├── decisions.md
-│   └── glossary.md
-├── .gitignore
+├── backend/               # Flask application, routes, and tests
+├── database/              # PostgreSQL schema, seed data, and SQL tests
+├── docs/                  # Architecture, API, database, and project decisions
+├── compose.yml            # Local PostgreSQL service
 └── README.md
 ```
 
-## Local Development Requirements
+## Requirements
 
-- **Node.js** 18+ and npm 9+
-- **Python** 3.8+
-- **pip** (Python package manager)
-- **Git** for version control
-- PostgreSQL 13+ (required for the Database Foundation milestone of Phase 1)
+- Node.js 18+ and npm
+- Python 3.14 recommended, with `venv` and `pip`
+- Docker Desktop for the local PostgreSQL service
 
 ## Quick Start
 
-### 1. Frontend Setup
+### 1. Start PostgreSQL
 
-```bash
-# Install dependencies
-cd frontend
-npm install
+From the repository root, provide the `POSTGRES_DB`, `POSTGRES_USER`, and
+`POSTGRES_PASSWORD` values expected by `compose.yml`, then run:
 
-# Start development server (runs on http://localhost:5173)
-npm run dev
+```powershell
+docker compose up -d postgres
 ```
 
-The frontend will display:
-```
-ALE Ticket Management Tool
-Phase 1 development environment
+PostgreSQL is available on `localhost:5433`.
+
+### 2. Configure and start the backend
+
+Create `backend/.env` with the database settings and a long random Flask secret:
+
+```text
+FLASK_SECRET_KEY=<long-random-value>
+DB_HOST=localhost
+DB_PORT=5433
+DB_NAME=<database-name>
+DB_USER=<database-user>
+DB_PASSWORD=<database-password>
 ```
 
-### 2. Backend Setup
+Then run:
 
-```bash
-# Navigate to backend
+```powershell
 cd backend
-
-# Create Python virtual environment
 python -m venv .venv
-
-# Activate virtual environment (Windows PowerShell)
 .\.venv\Scripts\Activate.ps1
-
-# Activate virtual environment (Windows CMD)
-.venv\Scripts\activate.bat
-
-# Activate virtual environment (macOS/Linux)
-source .venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Run Flask server (runs on http://localhost:5000)
 python run.py
 ```
 
-## Verify Installation
+The backend runs on `http://localhost:5000`. `CORS_ALLOWED_ORIGINS` defaults to
+`http://localhost:5173`; `SESSION_COOKIE_SECURE` defaults to `false` for local HTTP.
 
-### Test GET /health Endpoint
+### 3. Start the frontend
 
-**Option 1: Using Browser**
-```
-Navigate to: http://localhost:5000/health
+In a second terminal:
 
-Expected response:
-{
-  "status": "ok",
-  "message": "Backend is running"
-}
-```
-
-**Option 2: Using curl (PowerShell)**
 ```powershell
-curl http://localhost:5000/health
+cd frontend
+npm install
+npm run dev
 ```
 
-**Option 3: Using curl (CMD)**
-```cmd
-curl http://localhost:5000/health
+The frontend runs on `http://localhost:5173`.
+
+## Verify the Backend
+
+The health endpoint checks both Flask and PostgreSQL:
+
+```powershell
+curl http://localhost:5000/api/health
 ```
 
-**Option 4: Using Python**
-```python
-import requests
-response = requests.get('http://localhost:5000/health')
-print(response.json())
-```
+Expected healthy response:
 
-Expected output:
 ```json
 {
-  "status": "ok",
-  "message": "Backend is running"
+  "status": "healthy",
+  "backend": "active",
+  "database": "connected"
 }
 ```
+
+## Authentication Flow
+
+The browser first calls `GET /api/auth/csrf`, then sends the returned token in
+`X-CSRF-Token` for state-changing requests. Login establishes a session. Accounts
+created by an administrator receive a temporary password and must change it before
+using normal protected workflows. A successful password change clears the session and
+requires a fresh login.
 
 ## Current Status
 
-### ✅ Completed (Project Setup Milestone)
+Implemented Phase 1 capabilities include:
 
-- React frontend with Vite
-- Flask backend with health endpoint
-- Project structure and documentation
-- Environment configuration files
-- .gitignore setup
+- PostgreSQL schema, seed data, connection handling, and health checks
+- Session-based login, logout, current-user lookup, and CSRF protection
+- Admin user provisioning with one-time temporary passwords
+- Ticket creation, listing, detail views, comments, assignment, and status transitions
+- Requester ownership checks and role-based authorization
+- Immutable ticket status history and database integrity constraints
+- React login and password-change screens
 
-### 🔜 Required Phase 1 Features (Not yet implemented)
+Not yet implemented as HTTP workflows:
 
-These are planned Phase 1 features, intentionally not implemented during the Project Setup milestone:
+- SSO integration
+- Attachment upload/download
+- Ticket deletion or general ticket editing
+- Comment editing/deletion
+- Search, filtering, and notifications
 
-- PostgreSQL database connection (Database Foundation milestone)
-- User authentication and ALE SSO
-- Ticket CRUD operations
-- Comments and attachments
-- Ticket status and priority tracking
-- Search and filtering
-- Notifications
-- CORS configuration
+AI and LLM integrations are excluded from Phase 1.
 
-### ❌ Excluded from Phase 1
+## Tests
 
-- AI/LLM features (deferred to Phase 2)
-- OpenAI, Claude, Anthropic, or any AI API integrations
+Run the backend test suite from the repository root:
 
-## Important Notes
-
-### Phase 1 Scope
-
-Phase 1 delivers the full ALE ticket management application across several milestones:
-
-- **Project Setup** (current) — project foundation, React frontend, Flask backend, health endpoint
-- **Database Foundation** — PostgreSQL connection, schema, seed data
-- **Authentication** — internal ALE team login, session management
-- **Ticket Management** — CRUD operations, comments, attachments, search, filtering
-
-### Phase 1 Restrictions
-
-The following are **excluded from Phase 1** and deferred to Phase 2:
-- ❌ AI/LLM features
-- ❌ OpenAI, Claude, Anthropic, or any AI API integrations
-
-### Backend Status (Project Setup Milestone)
-
-The Flask backend currently:
-- ✅ Starts successfully on port 5000
-- ✅ Responds to GET /health with HTTP 200
-- ✅ Returns correct JSON format
-- 🔜 PostgreSQL connection (Database Foundation milestone)
-- 🔜 Authentication (Authentication milestone)
-- 🔜 Ticket operations (Ticket Management milestone)
-
-### Frontend Status (Project Setup Milestone)
-
-The React frontend currently:
-- ✅ Starts successfully on port 5173
-- ✅ Displays "ALE Ticket Management Tool" heading
-- ✅ Displays "Phase 1 development environment" text
-- 🔜 Flask API calls (Database Foundation milestone)
-- 🔜 Ticket views (Ticket Management milestone)
-- 🔜 Authentication UI (Authentication milestone)
-
-## Next Milestone: Database Foundation (Phase 1)
-
-1. Connect PostgreSQL database
-2. Create and apply schema.sql table definitions
-3. Configure DATABASE_URL in .env
-4. Verify database connection from Flask
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m pytest -q
+```
 
 ## Documentation
 
-Detailed documentation available in the `docs/` folder:
-
-- [Architecture](docs/architecture.md) - System design and component overview
-- [API Documentation](docs/api.md) - REST endpoint specifications
-- [Database Design](docs/database.md) - Schema planning
-- [Engineering Decisions](docs/decisions.md) - Key project decisions and rationale
+- [Architecture](docs/architecture.md) - System design and component responsibilities
+- [API Documentation](docs/api.md) - Endpoint and security contracts
+- [Database Design](docs/database.md) - PostgreSQL tables and constraints
+- [Engineering Decisions](docs/decisions.md) - Adopted technical decisions
 - [Glossary](docs/glossary.md) - Project terminology
-
-## Support
-
-For issues or questions about this project, refer to:
-1. [docs/glossary.md](docs/glossary.md) for terminology
-2. [docs/architecture.md](docs/architecture.md) for system design
-3. [docs/decisions.md](docs/decisions.md) for technical decisions
+- [Backend README](backend/README.md) - Backend setup and configuration details
 
 ---
 
-**Project Status**: Phase 1 — Project Setup milestone complete  
-**Last Updated**: 2026-07-29  
+**Project Status**: Phase 1 implementation in progress
+**Last Updated**: 2026-09-15
 **Maintainer**: ALE Lab Team
