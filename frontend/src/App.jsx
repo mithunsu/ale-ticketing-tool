@@ -3,12 +3,14 @@ import { useEffect, useState } from 'react'
 import { getCurrentUser, logout } from './api'
 import './App.css'
 import LoginPage from './components/LoginPage'
+import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState(null)
+  const [currentView, setCurrentView] = useState('active-tickets')
 
   function handleLoginSuccess(user) {
     setAuthError(null)
@@ -48,6 +50,7 @@ function App() {
     try {
       await logout()
       setCurrentUser(null)
+      setCurrentView('active-tickets')
     } catch (error) {
       setAuthError(error.message)
     }
@@ -75,13 +78,24 @@ function App() {
     return <PasswordChangePage onPasswordChangeSuccess={handlePasswordChangeSuccess} />
   }
 
+  const viewLabels = {
+    'active-tickets': 'Active Tickets',
+    'create-ticket': 'Create Ticket',
+    'closed-tickets': 'Closed Tickets',
+  }
+
   return (
-    <div className="container">
-      <h1>ALE Ticket Management Tool</h1>
-      <p>Phase 1 development environment</p>
+    <div className="app-shell">
+      <Navigation
+        currentUser={currentUser}
+        currentView={currentView}
+        onNavigate={setCurrentView}
+        onLogout={handleLogout}
+      />
       {authError && <p role="alert">{authError}</p>}
-      <p>Signed in as {currentUser.name} ({currentUser.role})</p>
-      <button type="button" onClick={handleLogout}>Log out</button>
+      <main className="app-content">
+        <h1>{viewLabels[currentView]}</h1>
+      </main>
     </div>
   )
 }
