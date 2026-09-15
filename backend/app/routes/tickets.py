@@ -574,6 +574,93 @@ def create_ticket_comment(ticket_id):
     return success_response({"data": {"comment": comment}}, status_code=201)
 
 
+@tickets_bp.route("/api/tickets/<ticket_id>/comments", methods=["GET"])
+@require_auth
+def list_ticket_comments(ticket_id):
+    current_user = g.current_user
+    if current_user["role"] not in ALLOWED_ROLES:
+        return error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to perform this action.",
+            status_code=403,
+        )
+
+    if not _is_valid_uuid(ticket_id):
+        return validation_error_response(details={"ticket_id": "Must be a valid UUID."})
+
+    comments_query = """
+        SELECT
+            c.id,
+            c.ticket_id,
+            c.author_id,
+            c.comment_text,
+            c.comment_type,
+            c.created_at,
+            u.name AS author_name,
+            u.email AS author_email
+        FROM ticket_comments c
+        LEFT JOIN users u ON c.author_id = u.id
+        WHERE c.ticket_id = %s
+        ORDER BY c.created_at ASC, c.id ASC;
+    """
+
+    try:
+        with get_db_connection() as connection:
+            with connection.cursor() as cursor:
+                # ticket access check mirrors GET /api/tickets/<ticket_id> anti-enumeration behavior
+                if current_user["role"] == "requester":
+                    cursor.execute(
+                        "SELECT id FROM tickets WHERE id = %s AND requester_id = %s;",
+                        (ticket_id, str(current_user["id"])),
+                    )
+                else:
+                    cursor.execute("SELECT id FROM tickets WHERE id = %s;", (ticket_id,))
+
+                if cursor.fetchone() is None:
+                    return error_response(
+                        code="TICKET_NOT_FOUND",
+                        message="The requested ticket does not exist.",
+                        status_code=404,
+                    )
+
+                cursor.execute(comments_query, (ticket_id,))
+                comment_rows = cursor.fetchall()
+    except psycopg.Error:
+        current_app.logger.error("Unable to list ticket comments.")
+        return error_response(
+            code="INTERNAL_SERVER_ERROR",
+            message="An unexpected server error occurred.",
+            status_code=500,
+        )
+
+    comments = []
+    for row in comment_rows:
+        (
+            comment_id,
+            comment_ticket_id,
+            author_id,
+            comment_text_value,
+            comment_type,
+            created_at,
+            author_name,
+            author_email,
+        ) = row
+        comments.append(
+            {
+                "id": str(comment_id),
+                "ticket_id": str(comment_ticket_id),
+                "user_id": str(author_id) if author_id is not None else None,
+                "comment": comment_text_value,
+                "comment_type": comment_type,
+                "created_at": _serialize_timestamp(created_at),
+                "author_name": author_name,
+                "author_email": author_email,
+            }
+        )
+
+    return success_response({"data": {"comments": comments}}, status_code=200)
+
+
 @tickets_bp.route("/api/tickets/<ticket_id>/status", methods=["PATCH"])
 @require_auth
 def update_ticket_status(ticket_id):
