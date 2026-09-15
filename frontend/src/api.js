@@ -71,3 +71,20 @@ export async function apiRequest(path, options = {}) {
 
   return payload
 }
+
+export async function getCurrentUser() {
+  const payload = await apiRequest('/api/auth/me')
+  return payload.data.user
+}
+
+export async function login(credentials) {
+  const payload = await apiRequest('/api/auth/login', {
+    method: 'POST',
+    body: credentials,
+  })
+  return payload.data.user
+}
+
+export function logout() {
+  return apiRequest('/api/auth/logout', { method: 'POST' })
+}
