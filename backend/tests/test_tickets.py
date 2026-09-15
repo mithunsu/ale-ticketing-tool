@@ -959,12 +959,13 @@ STATUS_TRANSITIONS = {
 }
 
 
-def _status_ticket(status="New", assigned_to=None, updated_at=None):
+def _status_ticket(status="New", assigned_to=None, updated_at=None, closed_at=None):
     return (
         TICKET_ID,
         status,
         assigned_to,
         updated_at or datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc),
+        closed_at,
     )
 
 
@@ -1028,7 +1029,7 @@ def test_unauthenticated_user_cannot_update_status():
     assert response.get_json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
-def test_requester_cannot_update_status(monkeypatch):
+def test_requester_cannot_perform_other_status_transitions(monkeypatch):
     cursor = _StubCursor(fetchone_results=[_status_ticket(status="New")])
     app, cursor, _connection = _app_with_assignment_user(monkeypatch, "requester", cursor)
 
@@ -1041,7 +1042,9 @@ def test_requester_cannot_update_status(monkeypatch):
         )
 
     assert response.status_code == 403
-    assert cursor.executed == []
+    # requester's only permitted transition is Closed -> In Progress, so the ownership SELECT runs but nothing is mutated
+    assert len(cursor.executed) == 1
+    assert "AND requester_id = %s" in cursor.executed[0][0]
 
 
 @pytest.mark.parametrize("ticket_id", ["invalid", "123", "c1f7b022-7772-4d2a-a92c"])
@@ -1078,7 +1081,7 @@ def test_nonexistent_ticket_status_returns_404(monkeypatch):
     assert len(cursor.executed) == 1
 
 
-@pytest.mark.parametrize("body", [{}, {"status": None}, {"status": 42}, {"status": "Closed"}, {"status": "invalid"}, {"status": "Open", "extra": True}])
+@pytest.mark.parametrize("body", [{}, {"status": None}, {"status": 42}, {"status": "Cancelled"}, {"status": "invalid"}, {"status": "Open", "extra": True}])
 def test_invalid_status_request_body_is_rejected(monkeypatch, body):
     app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", _StubCursor())
 
@@ -1103,7 +1106,7 @@ def test_allowed_status_transitions_succeed(monkeypatch, current_status, target_
     cursor = _StubCursor(
         fetchone_results=[
             _status_ticket(status=current_status, assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
-            (TICKET_ID, target_status, CURRENT_USER_ID, updated_at),
+            (TICKET_ID, target_status, CURRENT_USER_ID, updated_at, None),
         ]
     )
     app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
@@ -1144,7 +1147,7 @@ def test_invalid_status_transitions_are_rejected(monkeypatch, current_status, ta
     assert connection.committed is False
     assert cursor.executed == [
         (
-            "SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;",
+            "SELECT id, status, assigned_to, updated_at, closed_at FROM tickets WHERE id = %s;",
             (TICKET_ID,),
         )
     ]
@@ -1169,10 +1172,11 @@ def test_same_status_is_idempotent_without_update_or_history(monkeypatch):
         "status": "In Progress",
         "assigned_to": CURRENT_USER_ID,
         "updated_at": current_updated_at.isoformat(),
+        "closed_at": None,
     }
     assert connection.committed is False
     assert cursor.executed == [
-        ("SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;", (TICKET_ID,))
+        ("SELECT id, status, assigned_to, updated_at, closed_at FROM tickets WHERE id = %s;", (TICKET_ID,))
     ]
 
 
@@ -1183,7 +1187,7 @@ def test_privileged_roles_can_change_status(monkeypatch, role):
     cursor = _StubCursor(
         fetchone_results=[
             _status_ticket(status="New", assigned_to=CURRENT_USER_ID if role == "support_engineer" else None, updated_at=current_updated_at),
-            (TICKET_ID, "Open", (CURRENT_USER_ID if role == "support_engineer" else None), updated_at),
+            (TICKET_ID, "Open", (CURRENT_USER_ID if role == "support_engineer" else None), updated_at, None),
         ]
     )
     app, cursor, connection = _app_with_assignment_user(monkeypatch, role, cursor)
@@ -1319,6 +1323,337 @@ def test_status_history_insert_rollback_reverts_status_in_real_postgres(postgres
             assert cur.fetchone()[0] == "New"
             cur.execute("SELECT COUNT(*) FROM ticket_history WHERE ticket_id = %s AND action = 'STATUS_CHANGED';", (ticket_id,))
             assert cur.fetchone()[0] == 0
+
+
+def _create_status_user(db_config, role, name, email):
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (name, email, role, department, status, password_hash, must_change_password)
+                VALUES (%s, %s, %s, 'QA', 'active', 'placeholder_hash', false)
+                RETURNING id;
+                """,
+                (name, email, role),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            return str(row[0])
+
+
+def _create_status_ticket(db_config, requester_id, status="New", assigned_to=None, resolution=None):
+    closed_at_clause = "CURRENT_TIMESTAMP" if status == "Closed" else "NULL"
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO tickets (
+                    title, description, setup_snapshot, requester_id, status, assigned_to, resolution, closed_at
+                )
+                VALUES (
+                    'Close/reopen test ticket',
+                    'Detailed description of the issue.',
+                    '{{"server_name": "lab-1", "server_ip": "10.0.0.1", "platform": "ALE", "dut": "router"}}'::jsonb,
+                    %s, %s, %s, %s, {closed_at_clause}
+                )
+                RETURNING id;
+                """,
+                (requester_id, status, assigned_to, resolution),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            return str(row[0])
+
+
+def _fetch_status_ticket_row(db_config, ticket_id):
+    with psycopg.connect(**db_config) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, closed_at FROM tickets WHERE id = %s;",
+                (ticket_id,),
+            )
+            return cur.fetchone()
+
+
+def _count_status_history(db_config, ticket_id, old_status, new_status):
+    with psycopg.connect(**db_config) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM ticket_history
+                WHERE ticket_id = %s AND action = 'STATUS_CHANGED' AND old_status = %s AND new_status = %s;
+                """,
+                (ticket_id, old_status, new_status),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            return row[0]
+
+
+def test_assigned_support_engineer_can_close_resolved_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    engineer_id = _create_status_user(test_db["config"], "support_engineer", "Close Engineer", "close.engineer@example.com")
+    ticket_id = _create_status_ticket(
+        test_db["config"], test_db["user_id"], status="Resolved", assigned_to=engineer_id, resolution="Fixed the issue."
+    )
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = engineer_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "Closed"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["status"] == "Closed"
+
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Closed"
+    assert closed_at is not None
+    assert _count_status_history(test_db["config"], ticket_id, "Resolved", "Closed") == 1
+
+
+def test_unassigned_support_engineer_cannot_close_resolved_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    other_engineer_id = _create_status_user(test_db["config"], "support_engineer", "Owner Engineer", "owner.engineer@example.com")
+    outside_engineer_id = _create_status_user(test_db["config"], "support_engineer", "Outside Engineer", "outside.engineer@example.com")
+    ticket_id = _create_status_ticket(
+        test_db["config"], test_db["user_id"], status="Resolved", assigned_to=other_engineer_id, resolution="Fixed the issue."
+    )
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = outside_engineer_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "Closed"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 403
+
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Resolved"
+    assert closed_at is None
+
+
+def test_manager_can_close_resolved_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    manager_id = _create_status_user(test_db["config"], "manager", "Close Manager", "close.manager@example.com")
+    ticket_id = _create_status_ticket(test_db["config"], test_db["user_id"], status="Resolved", resolution="Fixed the issue.")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = manager_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "Closed"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 200
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Closed"
+    assert closed_at is not None
+
+
+def test_admin_can_close_resolved_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    admin_id = _create_status_user(test_db["config"], "admin", "Close Admin", "close.admin@example.com")
+    ticket_id = _create_status_ticket(test_db["config"], test_db["user_id"], status="Resolved", resolution="Fixed the issue.")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = admin_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "Closed"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 200
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Closed"
+    assert closed_at is not None
+
+
+def test_requester_cannot_close_resolved_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    requester_id = test_db["user_id"]
+    ticket_id = _create_status_ticket(test_db["config"], requester_id, status="Resolved", resolution="Fixed the issue.")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = requester_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "Closed"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 403
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Resolved"
+    assert closed_at is None
+
+
+def test_requester_can_reopen_own_closed_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    requester_id = test_db["user_id"]
+    ticket_id = _create_status_ticket(test_db["config"], requester_id, status="Closed", resolution="Fixed the issue.")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = requester_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "In Progress"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["status"] == "In Progress"
+
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "In Progress"
+    assert closed_at is None
+    assert _count_status_history(test_db["config"], ticket_id, "Closed", "In Progress") == 1
+
+
+def test_requester_cannot_reopen_another_requesters_closed_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    other_requester_id = _create_status_user(test_db["config"], "requester", "Other Requester Close", "other.requester.close@example.com")
+    ticket_id = _create_status_ticket(test_db["config"], other_requester_id, status="Closed", resolution="Fixed the issue.")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = test_db["user_id"]
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "In Progress"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "TICKET_NOT_FOUND"
+
+    status, _closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Closed"
+
+
+def test_assigned_support_engineer_can_reopen_closed_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    engineer_id = _create_status_user(test_db["config"], "support_engineer", "Reopen Engineer", "reopen.engineer@example.com")
+    ticket_id = _create_status_ticket(
+        test_db["config"], test_db["user_id"], status="Closed", assigned_to=engineer_id, resolution="Fixed the issue."
+    )
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = engineer_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "In Progress"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 200
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "In Progress"
+    assert closed_at is None
+
+
+def test_unassigned_support_engineer_cannot_reopen_closed_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    owner_engineer_id = _create_status_user(test_db["config"], "support_engineer", "Owner Engineer Reopen", "owner.engineer.reopen@example.com")
+    outside_engineer_id = _create_status_user(test_db["config"], "support_engineer", "Outside Engineer Reopen", "outside.engineer.reopen@example.com")
+    ticket_id = _create_status_ticket(
+        test_db["config"], test_db["user_id"], status="Closed", assigned_to=owner_engineer_id, resolution="Fixed the issue."
+    )
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = outside_engineer_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "In Progress"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 403
+    status, _closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Closed"
+
+
+def test_manager_can_reopen_closed_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    manager_id = _create_status_user(test_db["config"], "manager", "Reopen Manager", "reopen.manager@example.com")
+    ticket_id = _create_status_ticket(test_db["config"], test_db["user_id"], status="Closed", resolution="Fixed the issue.")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = manager_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "In Progress"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 200
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "In Progress"
+    assert closed_at is None
+
+
+def test_admin_can_reopen_closed_ticket(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    admin_id = _create_status_user(test_db["config"], "admin", "Reopen Admin", "reopen.admin@example.com")
+    ticket_id = _create_status_ticket(test_db["config"], test_db["user_id"], status="Closed", resolution="Fixed the issue.")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = admin_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "In Progress"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 200
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "In Progress"
+    assert closed_at is None
+    assert _count_status_history(test_db["config"], ticket_id, "Closed", "In Progress") == 1
+
+
+def test_reopen_history_insert_rollback_reverts_status_and_closed_at(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    requester_id = test_db["user_id"]
+    ticket_id = _create_status_ticket(test_db["config"], requester_id, status="Closed", resolution="Fixed the issue.")
+
+    trigger_sql = """
+    CREATE OR REPLACE FUNCTION _test_fail_reopen_history()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        IF NEW.action = 'STATUS_CHANGED' AND NEW.old_status = 'Closed' THEN
+            RAISE EXCEPTION 'Simulated reopen history insert failure';
+        END IF;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER _test_reject_reopen_history_trigger
+    BEFORE INSERT ON ticket_history
+    FOR EACH ROW
+    EXECUTE FUNCTION _test_fail_reopen_history();
+    """
+    with psycopg.connect(**test_db["config"], autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(trigger_sql)
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = requester_id
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status", json={"status": "In Progress"}, headers=csrf_headers(client)
+        )
+
+    assert response.status_code == 500
+    status, closed_at = _fetch_status_ticket_row(test_db["config"], ticket_id)
+    assert status == "Closed"
+    assert closed_at is not None
 
 
 # assignment tests follow below

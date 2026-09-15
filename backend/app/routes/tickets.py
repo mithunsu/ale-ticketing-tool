@@ -13,12 +13,14 @@ from app.validation import parse_json_request, validate_object
 tickets_bp = Blueprint("tickets", __name__)
 
 ALLOWED_ROLES = ("requester", "support_engineer", "manager", "admin")
-VALID_TICKET_STATUS_VALUES = ("New", "Open", "In Progress", "Resolved")
+VALID_TICKET_STATUS_VALUES = ("New", "Open", "In Progress", "Resolved", "Closed")
 ALLOWED_STATUS_TRANSITIONS = {
     ("New", "Open"),
     ("Open", "In Progress"),
     ("In Progress", "Resolved"),
     ("Resolved", "In Progress"),
+    ("Resolved", "Closed"),
+    ("Closed", "In Progress"),
 }
 PRIORITY_VALUES = ("Low", "Medium", "High", "Critical")
 PRIORITY_TO_DATABASE_VALUE = {priority: priority.lower() for priority in PRIORITY_VALUES}
@@ -62,12 +64,13 @@ def _serialize_assignment(ticket_id, assigned_to, updated_at):
     }
 
 
-def _serialize_status_ticket(ticket_id, status, assigned_to, updated_at):
+def _serialize_status_ticket(ticket_id, status, assigned_to, updated_at, closed_at=None):
     return {
         "id": str(ticket_id),
         "status": status,
         "assigned_to": str(assigned_to) if assigned_to is not None else None,
         "updated_at": _serialize_timestamp(updated_at),
+        "closed_at": _serialize_timestamp(closed_at) if closed_at is not None else None,
     }
 
 
@@ -665,7 +668,7 @@ def list_ticket_comments(ticket_id):
 @require_auth
 def update_ticket_status(ticket_id):
     current_user = g.current_user
-    if current_user["role"] == "requester":
+    if current_user["role"] not in ALLOWED_ROLES:
         return error_response(
             code="FORBIDDEN",
             message="You do not have permission to perform this action.",
@@ -694,10 +697,17 @@ def update_ticket_status(ticket_id):
     try:
         with get_db_connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;",
-                    (ticket_id,),
-                )
+                # requester ownership filter doubles as the anti-enumeration check for reopen requests
+                if current_user["role"] == "requester":
+                    cursor.execute(
+                        "SELECT id, status, assigned_to, updated_at, closed_at FROM tickets WHERE id = %s AND requester_id = %s;",
+                        (ticket_id, current_user_id),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id, status, assigned_to, updated_at, closed_at FROM tickets WHERE id = %s;",
+                        (ticket_id,),
+                    )
                 ticket_row = cursor.fetchone()
                 if ticket_row is None:
                     return error_response(
@@ -706,7 +716,7 @@ def update_ticket_status(ticket_id):
                         status_code=404,
                     )
 
-                ticket_id_db, current_status, assigned_to, updated_at = ticket_row
+                ticket_id_db, current_status, assigned_to, updated_at, closed_at = ticket_row
                 if current_user["role"] == "support_engineer":
                     if assigned_to is None or str(assigned_to) != current_user_id:
                         return error_response(
@@ -715,30 +725,56 @@ def update_ticket_status(ticket_id):
                             status_code=403,
                         )
 
+                # requester's only permitted transition is the manual Closed -> In Progress reopen
+                if current_user["role"] == "requester" and not (
+                    current_status == "Closed" and target_status == "In Progress"
+                ):
+                    return error_response(
+                        code="FORBIDDEN",
+                        message="You do not have permission to perform this action.",
+                        status_code=403,
+                    )
+
                 if target_status == current_status:
                     return success_response(
-                        {"data": {"ticket": _serialize_status_ticket(ticket_id_db, current_status, assigned_to, updated_at)}},
+                        {
+                            "data": {
+                                "ticket": _serialize_status_ticket(
+                                    ticket_id_db, current_status, assigned_to, updated_at, closed_at
+                                )
+                            }
+                        },
                         status_code=200,
                     )
 
                 if (current_status, target_status) not in ALLOWED_STATUS_TRANSITIONS:
                     return validation_error_response(details={"status": "Invalid status transition."})
 
-                if current_user["role"] == "support_engineer":
-                    cursor.execute(
-                        "UPDATE tickets SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND status = %s AND assigned_to = %s RETURNING id, status, assigned_to, updated_at;",
-                        (target_status, ticket_id, current_status, current_user_id),
-                    )
+                # closed_at is derived server-side only; the client cannot set or override it.
+                if target_status == "Closed":
+                    closed_at_assignment = "CURRENT_TIMESTAMP"
+                elif current_status == "Closed" and target_status == "In Progress":
+                    closed_at_assignment = "NULL"
                 else:
-                    cursor.execute(
-                        "UPDATE tickets SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND status = %s RETURNING id, status, assigned_to, updated_at;",
-                        (target_status, ticket_id, current_status),
-                    )
+                    closed_at_assignment = "closed_at"
+
+                update_sql = (
+                    f"UPDATE tickets SET status = %s, closed_at = {closed_at_assignment}, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = %s AND status = %s"
+                )
+                if current_user["role"] == "support_engineer":
+                    update_sql += " AND assigned_to = %s"
+                    update_params = (target_status, ticket_id, current_status, current_user_id)
+                else:
+                    update_params = (target_status, ticket_id, current_status)
+                update_sql += " RETURNING id, status, assigned_to, updated_at, closed_at;"
+
+                cursor.execute(update_sql, update_params)
 
                 updated_ticket = cursor.fetchone()
                 if updated_ticket is None:
                     cursor.execute(
-                        "SELECT id, status, assigned_to, updated_at FROM tickets WHERE id = %s;",
+                        "SELECT id, status, assigned_to, updated_at, closed_at FROM tickets WHERE id = %s;",
                         (ticket_id,),
                     )
                     current_ticket = cursor.fetchone()
