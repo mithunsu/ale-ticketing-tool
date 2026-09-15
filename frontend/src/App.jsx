@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { getCurrentUser, logout } from './api'
 import './App.css'
+import LoginPage from './components/LoginPage'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)
@@ -55,19 +56,21 @@ function App() {
     return <div className="container">Checking session...</div>
   }
 
+  if (!currentUser) {
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />
+  }
+
   return (
     <div className="container">
       <h1>ALE Ticket Management Tool</h1>
       <p>Phase 1 development environment</p>
       {authError && <p role="alert">{authError}</p>}
-      {currentUser ? (
-        <>
-          <p>Signed in as {currentUser.name} ({currentUser.role})</p>
-          <button type="button" onClick={handleLogout}>Log out</button>
-        </>
+      {currentUser.must_change_password ? (
+        <p>You must change your temporary password before continuing.</p>
       ) : (
-        <p>You are not signed in.</p>
+        <p>Signed in as {currentUser.name} ({currentUser.role})</p>
       )}
+      <button type="button" onClick={handleLogout}>Log out</button>
     </div>
   )
 }
