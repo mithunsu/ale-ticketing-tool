@@ -88,3 +88,10 @@ export async function login(credentials) {
 export function logout() {
   return apiRequest('/api/auth/logout', { method: 'POST' })
 }
+
+export function changePassword(passwords) {
+  return apiRequest('/api/auth/change-password', {
+    method: 'POST',
+    body: passwords,
+  })
+}

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { getCurrentUser, logout } from './api'
 import './App.css'
 import LoginPage from './components/LoginPage'
+import PasswordChangePage from './components/PasswordChangePage'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)
@@ -52,12 +53,26 @@ function App() {
     }
   }
 
+  function handlePasswordChangeSuccess() {
+    setCurrentUser(null)
+    setAuthError('Password changed successfully. Please sign in again.')
+  }
+
   if (authLoading) {
     return <div className="container">Checking session...</div>
   }
 
   if (!currentUser) {
-    return <LoginPage onLoginSuccess={handleLoginSuccess} />
+    return (
+      <>
+        {authError && <p className="session-message" role="alert">{authError}</p>}
+        <LoginPage onLoginSuccess={handleLoginSuccess} />
+      </>
+    )
+  }
+
+  if (currentUser.must_change_password) {
+    return <PasswordChangePage onPasswordChangeSuccess={handlePasswordChangeSuccess} />
   }
 
   return (
@@ -65,11 +80,7 @@ function App() {
       <h1>ALE Ticket Management Tool</h1>
       <p>Phase 1 development environment</p>
       {authError && <p role="alert">{authError}</p>}
-      {currentUser.must_change_password ? (
-        <p>You must change your temporary password before continuing.</p>
-      ) : (
-        <p>Signed in as {currentUser.name} ({currentUser.role})</p>
-      )}
+      <p>Signed in as {currentUser.name} ({currentUser.role})</p>
       <button type="button" onClick={handleLogout}>Log out</button>
     </div>
   )
