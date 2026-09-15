@@ -8,12 +8,21 @@ from conftest import csrf_headers
 
 
 class _StubCursor:
-    def __init__(self, ticket=None, tickets=None, history=None, count=None, error_on_history=None):
+    def __init__(
+        self,
+        ticket=None,
+        tickets=None,
+        history=None,
+        count=None,
+        error_on_history=None,
+        fetchone_results=None,
+    ):
         self.ticket = ticket
         self.tickets = tickets if tickets is not None else []
         self.history = history if history is not None else []
         self.count = count if count is not None else len(self.tickets)
         self.error_on_history = error_on_history
+        self.fetchone_results = list(fetchone_results or [])
         self.executed = []
         self._last_query = ""
 
@@ -30,6 +39,8 @@ class _StubCursor:
             raise self.error_on_history
 
     def fetchone(self):
+        if self.fetchone_results:
+            return self.fetchone_results.pop(0)
         if "COUNT(*)" in self._last_query.upper():
             return (self.count,)
         return self.ticket
@@ -934,3 +945,389 @@ def test_no_sensitive_user_fields_in_ticket_detail_or_history(monkeypatch):
         query = execution[0]
         for key in sensitive_keys:
             assert key not in query
+
+
+TICKET_ID = "c1f7b022-7772-4d2a-a92c-0e9e110d9f01"
+CURRENT_USER_ID = "d2f7b022-7772-4d2a-a92c-0e9e110d9f01"
+OTHER_USER_ID = "e3f7b022-7772-4d2a-a92c-0e9e110d9f01"
+
+
+def _assignment_ticket(assigned_to=None, updated_at=None):
+    return (
+        TICKET_ID,
+        assigned_to,
+        updated_at or datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc),
+    )
+
+
+def _app_with_assignment_user(monkeypatch, role, cursor):
+    app, cursor, connection = _app_with_current_user(monkeypatch, role=role, cursor=cursor)
+    import app.routes.auth as auth
+
+    monkeypatch.setattr(
+        auth,
+        "_user_lookup_by_id",
+        lambda _user_id: (CURRENT_USER_ID, "Actor", "actor@example.com", role, "active", "hash", False),
+    )
+    return app, cursor, connection
+
+
+def _authenticate_assignment_user(client):
+    with client.session_transaction() as session:
+        session["user_id"] = CURRENT_USER_ID
+
+
+def _assignment_headers(client):
+    return csrf_headers(client)
+
+
+def test_unauthenticated_user_cannot_update_assignment():
+    app = create_app()
+
+    with app.test_client() as client:
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+def test_requester_cannot_update_assignment(monkeypatch):
+    cursor = _StubCursor()
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "requester", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 403
+    assert cursor.executed == []
+
+
+@pytest.mark.parametrize("ticket_id", ["invalid", "123", "c1f7b022-7772-4d2a-a92c"])
+def test_malformed_assignment_ticket_id_is_rejected(monkeypatch, ticket_id):
+    cursor = _StubCursor()
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert "ticket_id" in response.get_json()["error"]["details"]
+    assert cursor.executed == []
+
+
+@pytest.mark.parametrize("body", [{}, {"assigned_to": "invalid"}, {"assigned_to": 42}])
+def test_invalid_assignment_request_body_is_rejected(monkeypatch, body):
+    cursor = _StubCursor()
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json=body,
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert "assigned_to" in response.get_json()["error"]["details"]
+    assert cursor.executed == []
+
+
+def test_nonexistent_ticket_assignment_returns_404(monkeypatch):
+    cursor = _StubCursor(fetchone_results=[None])
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "TICKET_NOT_FOUND"
+    assert len(cursor.executed) == 1
+
+
+def test_support_engineer_can_self_assign_unassigned_ticket(monkeypatch):
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _assignment_ticket(),
+            (CURRENT_USER_ID, "support_engineer", "active"),
+            _assignment_ticket(CURRENT_USER_ID, updated_at),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": CURRENT_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"] == {
+        "id": TICKET_ID,
+        "assigned_to": CURRENT_USER_ID,
+        "updated_at": updated_at.isoformat(),
+    }
+    assert connection.committed is True
+    assert len(cursor.executed) == 3
+    update_query, update_params = cursor.executed[-1]
+    assert "UPDATE tickets" in update_query
+    assert "WHERE id = %s AND assigned_to IS NULL" in update_query
+    assert update_params == (CURRENT_USER_ID, TICKET_ID)
+    assert all("ticket_history" not in query.lower() for query, _ in cursor.executed)
+
+
+def test_support_engineer_cannot_overwrite_concurrent_assignment(monkeypatch):
+    other_updated_at = datetime(2026, 9, 14, 11, 5, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _assignment_ticket(),
+            (CURRENT_USER_ID, "support_engineer", "active"),
+            None,
+            _assignment_ticket(OTHER_USER_ID, other_updated_at),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": CURRENT_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 403
+    assert connection.committed is False
+    assert len(cursor.executed) == 4
+    conditional_update_query, conditional_update_params = cursor.executed[2]
+    reload_query, reload_params = cursor.executed[3]
+    assert "WHERE id = %s AND assigned_to IS NULL" in conditional_update_query
+    assert conditional_update_params == (CURRENT_USER_ID, TICKET_ID)
+    assert "SELECT id, assigned_to, updated_at FROM tickets WHERE id = %s" in reload_query
+    assert reload_params == (TICKET_ID,)
+    assert all("ticket_history" not in query.lower() for query, _ in cursor.executed)
+
+
+def test_concurrent_self_assignment_is_idempotent(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 11, 5, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _assignment_ticket(),
+            (CURRENT_USER_ID, "support_engineer", "active"),
+            None,
+            _assignment_ticket(CURRENT_USER_ID, current_updated_at),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": CURRENT_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["updated_at"] == current_updated_at.isoformat()
+    assert connection.committed is False
+    assert len(cursor.executed) == 4
+    assert all("ticket_history" not in query.lower() for query, _ in cursor.executed)
+
+
+@pytest.mark.parametrize("target_role", ["support_engineer", "manager"])
+def test_support_engineer_cannot_assign_another_user(monkeypatch, target_role):
+    cursor = _StubCursor()
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 403
+    assert cursor.executed == []
+
+
+def test_support_engineer_cannot_unassign_or_take_over(monkeypatch):
+    cursor = _StubCursor(fetchone_results=[_assignment_ticket(OTHER_USER_ID)])
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        unassign_response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": None},
+            headers=_assignment_headers(client),
+        )
+        take_over_response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": CURRENT_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert unassign_response.status_code == 403
+    assert take_over_response.status_code == 403
+    assert len(cursor.executed) == 1
+
+
+def test_same_assignment_is_idempotent_without_update(monkeypatch):
+    original_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(fetchone_results=[_assignment_ticket(CURRENT_USER_ID, original_updated_at)])
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": CURRENT_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["updated_at"] == original_updated_at.isoformat()
+    assert connection.committed is False
+    assert len(cursor.executed) == 1
+
+
+@pytest.mark.parametrize("actor_role", ["manager", "admin"])
+@pytest.mark.parametrize("target_role", ["support_engineer", "manager"])
+def test_manager_and_admin_can_assign_active_eligible_users(monkeypatch, actor_role, target_role):
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _assignment_ticket(),
+            (OTHER_USER_ID, target_role, "active"),
+            _assignment_ticket(OTHER_USER_ID, updated_at),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, actor_role, cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["assigned_to"] == OTHER_USER_ID
+    assert connection.committed is True
+    assert len(cursor.executed) == 3
+    update_query, update_params = cursor.executed[-1]
+    assert "UPDATE tickets" in update_query
+    assert "assigned_to IS NULL" not in update_query
+    assert update_params == (OTHER_USER_ID, TICKET_ID)
+
+
+@pytest.mark.parametrize("actor_role", ["manager", "admin"])
+def test_manager_and_admin_can_self_assign_and_unassign(monkeypatch, actor_role):
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _assignment_ticket(),
+            (CURRENT_USER_ID, actor_role, "active"),
+            _assignment_ticket(CURRENT_USER_ID, updated_at),
+            _assignment_ticket(CURRENT_USER_ID, updated_at),
+            _assignment_ticket(None, updated_at),
+        ]
+    )
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, actor_role, cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        self_assign = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": CURRENT_USER_ID},
+            headers=_assignment_headers(client),
+        )
+        unassign = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": None},
+            headers=_assignment_headers(client),
+        )
+
+    assert self_assign.status_code == 200
+    assert unassign.status_code == 200
+    assert unassign.get_json()["data"]["ticket"]["assigned_to"] is None
+
+
+def test_admin_cannot_assign_another_admin(monkeypatch):
+    cursor = _StubCursor(
+        fetchone_results=[_assignment_ticket(), (OTHER_USER_ID, "admin", "active")]
+    )
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "admin", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert "assigned_to" in response.get_json()["error"]["details"]
+    assert len(cursor.executed) == 2
+
+
+@pytest.mark.parametrize("target_role,target_status", [("requester", "active"), ("manager", "inactive")])
+def test_manager_cannot_assign_ineligible_user(monkeypatch, target_role, target_status):
+    cursor = _StubCursor(
+        fetchone_results=[_assignment_ticket(), (OTHER_USER_ID, target_role, target_status)]
+    )
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert len(cursor.executed) == 2
+
+
+def test_manager_cannot_assign_nonexistent_user(monkeypatch):
+    cursor = _StubCursor(fetchone_results=[_assignment_ticket(), None])
+    app, cursor, _connection = _app_with_assignment_user(monkeypatch, "manager", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/assignment",
+            json={"assigned_to": OTHER_USER_ID},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "ASSIGNEE_NOT_FOUND"
+    assert len(cursor.executed) == 2

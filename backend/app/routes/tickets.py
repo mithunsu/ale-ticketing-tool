@@ -47,6 +47,14 @@ def _is_valid_uuid(value: str) -> bool:
         return False
 
 
+def _serialize_assignment(ticket_id, assigned_to, updated_at):
+    return {
+        "id": str(ticket_id),
+        "assigned_to": str(assigned_to) if assigned_to is not None else None,
+        "updated_at": _serialize_timestamp(updated_at),
+    }
+
+
 
 @tickets_bp.route("/api/tickets", methods=["POST"])
 @require_auth
@@ -460,5 +468,155 @@ def get_ticket(ticket_id):
                 "history": history_data,
             }
         },
+        status_code=200,
+    )
+
+
+@tickets_bp.route("/api/tickets/<ticket_id>/assignment", methods=["PATCH"])
+@require_auth
+def update_ticket_assignment(ticket_id):
+    current_user = g.current_user
+    if current_user["role"] == "requester":
+        return error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to perform this action.",
+            status_code=403,
+        )
+
+    if not _is_valid_uuid(ticket_id):
+        return validation_error_response(details={"ticket_id": "Must be a valid UUID."})
+
+    payload, parse_error = parse_json_request(request)
+    if parse_error is not None:
+        return parse_error
+    assert payload is not None
+
+    normalized, errors = validate_object(payload, {"assigned_to": {"required": True}})
+    if errors is not None:
+        return validation_error_response(details=errors)
+    assert normalized is not None
+
+    assigned_to = normalized["assigned_to"]
+    if assigned_to is not None and (not isinstance(assigned_to, str) or not _is_valid_uuid(assigned_to)):
+        return validation_error_response(details={"assigned_to": "Must be a valid UUID or null."})
+
+    current_user_id = str(current_user["id"])
+    if current_user["role"] == "support_engineer" and assigned_to != current_user_id:
+        return error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to perform this action.",
+            status_code=403,
+        )
+
+    try:
+        with get_db_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, assigned_to, updated_at FROM tickets WHERE id = %s;",
+                    (ticket_id,),
+                )
+                ticket_row = cursor.fetchone()
+                if ticket_row is None:
+                    return error_response(
+                        code="TICKET_NOT_FOUND",
+                        message="The requested ticket does not exist.",
+                        status_code=404,
+                    )
+
+                current_assigned_to = str(ticket_row[1]) if ticket_row[1] is not None else None
+                if assigned_to == current_assigned_to:
+                    return success_response(
+                        {"data": {"ticket": _serialize_assignment(*ticket_row)}},
+                        status_code=200,
+                    )
+
+                if current_user["role"] == "support_engineer" and current_assigned_to is not None:
+                    return error_response(
+                        code="FORBIDDEN",
+                        message="You do not have permission to perform this action.",
+                        status_code=403,
+                    )
+
+                if assigned_to is not None:
+                    cursor.execute(
+                        "SELECT id, role, status FROM users WHERE id = %s;",
+                        (assigned_to,),
+                    )
+                    target_user = cursor.fetchone()
+                    if target_user is None:
+                        return error_response(
+                            code="ASSIGNEE_NOT_FOUND",
+                            message="The requested assignee does not exist.",
+                            status_code=404,
+                        )
+
+                    target_id, target_role, target_status = target_user
+                    is_admin_self_assignment = (
+                        current_user["role"] == "admin" and str(target_id) == current_user_id
+                    )
+                    if target_status != "active" or (
+                        target_role not in ("support_engineer", "manager")
+                        and not is_admin_self_assignment
+                    ):
+                        return validation_error_response(
+                            details={"assigned_to": "Must identify an active support engineer or manager."}
+                        )
+
+                if current_user["role"] == "support_engineer":
+                    cursor.execute(
+                        """
+                        UPDATE tickets
+                        SET assigned_to = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s AND assigned_to IS NULL
+                        RETURNING id, assigned_to, updated_at;
+                        """,
+                        (assigned_to, ticket_id),
+                    )
+                    updated_ticket = cursor.fetchone()
+                    if updated_ticket is None:
+                        cursor.execute(
+                            "SELECT id, assigned_to, updated_at FROM tickets WHERE id = %s;",
+                            (ticket_id,),
+                        )
+                        current_ticket = cursor.fetchone()
+                        if current_ticket is None:
+                            return error_response(
+                                code="TICKET_NOT_FOUND",
+                                message="The requested ticket does not exist.",
+                                status_code=404,
+                            )
+                        if str(current_ticket[1]) == current_user_id:
+                            return success_response(
+                                {"data": {"ticket": _serialize_assignment(*current_ticket)}},
+                                status_code=200,
+                            )
+                        return error_response(
+                            code="FORBIDDEN",
+                            message="You do not have permission to perform this action.",
+                            status_code=403,
+                        )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE tickets
+                        SET assigned_to = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                        RETURNING id, assigned_to, updated_at;
+                        """,
+                        (assigned_to, ticket_id),
+                    )
+                    updated_ticket = cursor.fetchone()
+                    assert updated_ticket is not None
+            connection.commit()
+    except psycopg.Error:
+        current_app.logger.error("Unable to update ticket assignment.")
+        return error_response(
+            code="INTERNAL_SERVER_ERROR",
+            message="An unexpected server error occurred.",
+            status_code=500,
+        )
+
+    return success_response(
+        {"data": {"ticket": _serialize_assignment(*updated_ticket)}},
         status_code=200,
     )
