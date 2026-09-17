@@ -213,6 +213,14 @@ def list_tickets():
         except (ValueError, TypeError):
             errors["limit"] = "Must be an integer."
 
+    raw_status_not = request.args.get("status_not")
+    status_not = None
+    if raw_status_not is not None:
+        if raw_status_not not in VALID_TICKET_STATUS_VALUES:
+            errors["status_not"] = f"Must be one of: {', '.join(VALID_TICKET_STATUS_VALUES)}."
+        else:
+            status_not = raw_status_not
+
     if errors:
         return validation_error_response(details=errors)
 
@@ -241,15 +249,35 @@ def list_tickets():
     """
 
     if current_user_role == "requester":
-        count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s;"
-        count_params = (str(g.current_user["id"]),)
-        query = base_query + "\n        WHERE t.requester_id = %s\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-        params = (str(g.current_user["id"]), limit, offset)
+        if status_not is not None:
+            count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s AND status <> %s;"
+            count_params = (str(g.current_user["id"]), status_not)
+            query = (
+                base_query
+                + "\n        WHERE t.requester_id = %s AND t.status <> %s"
+                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+            )
+            params = (str(g.current_user["id"]), status_not, limit, offset)
+        else:
+            count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s;"
+            count_params = (str(g.current_user["id"]),)
+            query = base_query + "\n        WHERE t.requester_id = %s\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+            params = (str(g.current_user["id"]), limit, offset)
     else:
-        count_query = "SELECT COUNT(*) FROM tickets;"
-        count_params = None
-        query = base_query + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-        params = (limit, offset)
+        if status_not is not None:
+            count_query = "SELECT COUNT(*) FROM tickets WHERE status <> %s;"
+            count_params = (status_not,)
+            query = (
+                base_query
+                + "\n        WHERE t.status <> %s"
+                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+            )
+            params = (status_not, limit, offset)
+        else:
+            count_query = "SELECT COUNT(*) FROM tickets;"
+            count_params = None
+            query = base_query + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+            params = (limit, offset)
 
     try:
         with get_db_connection() as connection:
