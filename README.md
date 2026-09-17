@@ -119,6 +119,8 @@ Implemented Phase 1 capabilities include:
 - Requester ownership checks and role-based authorization
 - Immutable ticket status history and database integrity constraints
 - React login and password-change screens
+- Authenticated top-level navigation shell (Active Tickets, Create Ticket, Closed
+  Tickets, Logout)
 
 Not yet implemented as HTTP workflows:
 
@@ -127,6 +129,7 @@ Not yet implemented as HTTP workflows:
 - Ticket deletion or general ticket editing
 - Comment editing/deletion
 - Search, filtering, and notifications
+- Frontend ticket list, creation, and detail views
 
 AI and LLM integrations are excluded from Phase 1.
 
@@ -152,5 +155,5 @@ python -m pytest -q
 ---
 
 **Project Status**: Phase 1 implementation in progress
-**Last Updated**: 2026-09-15
+**Last Updated**: 2026-09-17
 **Maintainer**: ALE Lab Team
