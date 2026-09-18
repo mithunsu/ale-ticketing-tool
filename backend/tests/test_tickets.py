@@ -315,6 +315,39 @@ def _sample_ticket_row(
     )
 
 
+def _sample_ticket_list_row(
+    ticket_id="ticket-1",
+    ticket_number=101,
+    title="Router issue",
+    requester_id="user-1",
+    requester_name="Alice Requester",
+    requester_email="alice@example.com",
+    assigned_to=None,
+    assignee_name=None,
+    created_at=None,
+):
+    ts = created_at or datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)
+    return (
+        ticket_id,
+        ticket_number,
+        title,
+        "Detailed problem description",
+        "high",
+        "New",
+        requester_id,
+        requester_name,
+        requester_email,
+        assigned_to,
+        assignee_name,
+        {"server_name": "srv1", "server_ip": "10.0.0.1", "platform": "ALE", "dut": "switch"},
+        None,
+        None,
+        ts,
+        ts,
+        None,
+    )
+
+
 def _sample_history_row(
     history_id="h1f7b022-7772-4d2a-a92c-0e9e110d9f01",
     action="TICKET_CREATED",
@@ -350,7 +383,7 @@ def test_unauthenticated_get_tickets_is_rejected():
 
 
 def test_requester_sees_only_own_tickets_with_display_info(monkeypatch):
-    row_user1 = _sample_ticket_row(ticket_id="t-1", requester_id="user-1", requester_name="Alice", requester_email="alice@example.com")
+    row_user1 = _sample_ticket_list_row(ticket_id="t-1", requester_id="user-1", requester_name="Alice", requester_email="alice@example.com")
     cursor = _StubCursor(tickets=[row_user1], count=1)
     app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
 
@@ -437,8 +470,8 @@ def test_authenticated_requester_with_no_tickets_receives_empty_list(monkeypatch
 
 @pytest.mark.parametrize("role", ["support_engineer", "manager", "admin"])
 def test_privileged_roles_see_all_tickets_from_multiple_requesters(monkeypatch, role):
-    row1 = _sample_ticket_row(ticket_id="t-1", requester_id="user-1", requester_name="Alice", requester_email="alice@example.com")
-    row2 = _sample_ticket_row(ticket_id="t-2", requester_id="user-2", requester_name="Bob", requester_email="bob@example.com")
+    row1 = _sample_ticket_list_row(ticket_id="t-1", requester_id="user-1", requester_name="Alice", requester_email="alice@example.com")
+    row2 = _sample_ticket_list_row(ticket_id="t-2", requester_id="user-2", requester_name="Bob", requester_email="bob@example.com")
     cursor = _StubCursor(tickets=[row1, row2], count=2)
     app, cursor, _connection = _app_with_current_user(monkeypatch, role=role, cursor=cursor)
 
@@ -469,12 +502,12 @@ def test_privileged_roles_see_all_tickets_from_multiple_requesters(monkeypatch, 
 
 
 def test_tickets_returned_ordered_newest_first(monkeypatch):
-    t_newer = _sample_ticket_row(
+    t_newer = _sample_ticket_list_row(
         ticket_id="t-2",
         ticket_number=102,
         created_at=datetime(2026, 9, 11, 15, 0, tzinfo=timezone.utc),
     )
-    t_older = _sample_ticket_row(
+    t_older = _sample_ticket_list_row(
         ticket_id="t-1",
         ticket_number=101,
         created_at=datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc),
@@ -497,7 +530,7 @@ def test_tickets_returned_ordered_newest_first(monkeypatch):
 
 
 def test_no_sensitive_user_fields_in_list_response(monkeypatch):
-    row = _sample_ticket_row()
+    row = _sample_ticket_list_row()
     cursor = _StubCursor(tickets=[row], count=1)
     app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
 
@@ -562,7 +595,7 @@ def test_explicit_valid_pagination_parameters(monkeypatch):
 
 def test_pagination_returns_subset_and_metadata(monkeypatch):
     rows = [
-        _sample_ticket_row(ticket_id=f"t-{i}", ticket_number=100 + i)
+        _sample_ticket_list_row(ticket_id=f"t-{i}", ticket_number=100 + i)
         for i in range(1, 6)
     ]
     cursor = _StubCursor(tickets=rows, count=12)
@@ -705,7 +738,7 @@ def test_requesting_valid_page_beyond_total_pages(monkeypatch):
 
 
 def test_status_not_closed_is_accepted(monkeypatch):
-    row = _sample_ticket_row()
+    row = _sample_ticket_list_row()
     cursor = _StubCursor(tickets=[row], count=1)
     app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
 
@@ -829,6 +862,105 @@ def test_status_not_with_pagination_parameters(monkeypatch):
     _data_query, data_params = cursor.executed[1]
     assert count_params == ("Closed",)
     assert data_params == ("Closed", 10, 10)
+
+
+def test_list_includes_assignee_name_for_assigned_ticket(monkeypatch):
+    row = _sample_ticket_list_row(assigned_to="engineer-1", assignee_name="Sam Support")
+    cursor = _StubCursor(tickets=[row], count=1)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets")
+
+    assert response.status_code == 200
+    ticket = response.get_json()["data"]["tickets"][0]
+    assert ticket["assigned_to"] == "engineer-1"
+    assert ticket["assignee_name"] == "Sam Support"
+
+
+def test_list_unassigned_ticket_has_null_assignee_fields(monkeypatch):
+    row = _sample_ticket_list_row(assigned_to=None, assignee_name=None)
+    cursor = _StubCursor(tickets=[row], count=1)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets")
+
+    assert response.status_code == 200
+    ticket = response.get_json()["data"]["tickets"][0]
+    assert ticket["assigned_to"] is None
+    assert ticket["assignee_name"] is None
+
+
+def test_list_select_query_left_joins_assignee(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets")
+
+    assert response.status_code == 200
+    data_query, _data_params = cursor.executed[1]
+    assert "LEFT JOIN users assignee ON t.assigned_to = assignee.id" in data_query
+    assert "assignee.name AS assignee_name" in data_query
+    # requester join is unaffected and remains a separate alias
+    assert "INNER JOIN users u ON t.requester_id = u.id" in data_query
+
+
+def test_list_requester_name_preserved_alongside_assignee_name(monkeypatch):
+    row = _sample_ticket_list_row(
+        requester_name="Alice Requester",
+        requester_email="alice@example.com",
+        assigned_to="engineer-1",
+        assignee_name="Sam Support",
+    )
+    cursor = _StubCursor(tickets=[row], count=1)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets")
+
+    assert response.status_code == 200
+    ticket = response.get_json()["data"]["tickets"][0]
+    assert ticket["requester_name"] == "Alice Requester"
+    assert ticket["requester_email"] == "alice@example.com"
+    assert ticket["assignee_name"] == "Sam Support"
+
+
+def test_status_not_still_works_with_assignee_join(monkeypatch):
+    row = _sample_ticket_list_row(assigned_to="engineer-1", assignee_name="Sam Support")
+    cursor = _StubCursor(tickets=[row], count=1)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status_not=Closed")
+
+    assert response.status_code == 200
+    ticket = response.get_json()["data"]["tickets"][0]
+    assert ticket["assignee_name"] == "Sam Support"
+    data_query, data_params = cursor.executed[1]
+    assert "LEFT JOIN users assignee ON t.assigned_to = assignee.id" in data_query
+    assert "t.status <> %s" in data_query
+    assert data_params == ("Closed", 10, 0)
+
+
+def test_count_query_unaffected_by_assignee_join(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets")
+
+    assert response.status_code == 200
+    count_query, _count_params = cursor.executed[0]
+    assert count_query == "SELECT COUNT(*) FROM tickets;"
+    assert "assignee" not in count_query
 
 
 def test_unauthenticated_get_ticket_by_id_is_rejected():

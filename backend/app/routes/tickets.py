@@ -238,6 +238,7 @@ def list_tickets():
             u.name AS requester_name,
             u.email AS requester_email,
             t.assigned_to,
+            assignee.name AS assignee_name,
             t.setup_snapshot,
             t.due_date,
             t.resolution,
@@ -246,6 +247,7 @@ def list_tickets():
             t.closed_at
         FROM tickets t
         INNER JOIN users u ON t.requester_id = u.id
+        LEFT JOIN users assignee ON t.assigned_to = assignee.id
     """
 
     if current_user_role == "requester":
@@ -317,6 +319,7 @@ def list_tickets():
             requester_name,
             requester_email,
             assigned_to,
+            assignee_name,
             setup_snapshot,
             due_date,
             resolution,
@@ -337,6 +340,7 @@ def list_tickets():
                 "requester_name": requester_name,
                 "requester_email": requester_email,
                 "assigned_to": str(assigned_to) if assigned_to is not None else None,
+                "assignee_name": assignee_name,
                 "setup_snapshot": setup_snapshot,
                 "due_date": _serialize_timestamp(due_date) if due_date is not None else None,
                 "resolution": resolution,
