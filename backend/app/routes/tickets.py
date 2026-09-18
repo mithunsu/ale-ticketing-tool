@@ -144,7 +144,7 @@ def create_ticket():
                 )
             connection.commit()
     except psycopg.Error:
-        current_app.logger.error("Unable to create ticket.")
+        current_app.logger.error("Unable to create ticket.", exc_info=True)
         return error_response(
             code="INTERNAL_SERVER_ERROR",
             message="An unexpected server error occurred.",
@@ -326,7 +326,7 @@ def list_tickets():
                     cursor.execute(query)
                 rows = cursor.fetchall()
     except psycopg.Error:
-        current_app.logger.error("Unable to list tickets.")
+        current_app.logger.error("Unable to list tickets.", exc_info=True)
         return error_response(
             code="INTERNAL_SERVER_ERROR",
             message="An unexpected server error occurred.",
@@ -470,7 +470,7 @@ def get_ticket(ticket_id):
                 cursor.execute(history_query, (ticket_id,))
                 history_rows = cursor.fetchall()
     except psycopg.Error:
-        current_app.logger.error("Unable to get ticket.")
+        current_app.logger.error("Unable to get ticket.", exc_info=True)
         return error_response(
             code="INTERNAL_SERVER_ERROR",
             message="An unexpected server error occurred.",
@@ -609,7 +609,7 @@ def create_ticket_comment(ticket_id):
                 assert created_comment is not None
             connection.commit()
     except psycopg.Error:
-        current_app.logger.error("Unable to create ticket comment.")
+        current_app.logger.error("Unable to create ticket comment.", exc_info=True)
         return error_response(
             code="INTERNAL_SERVER_ERROR",
             message="An unexpected server error occurred.",
@@ -690,7 +690,7 @@ def list_ticket_comments(ticket_id):
                 cursor.execute(comments_query, (ticket_id,))
                 comment_rows = cursor.fetchall()
     except psycopg.Error:
-        current_app.logger.error("Unable to list ticket comments.")
+        current_app.logger.error("Unable to list ticket comments.", exc_info=True)
         return error_response(
             code="INTERNAL_SERVER_ERROR",
             message="An unexpected server error occurred.",
@@ -870,7 +870,7 @@ def update_ticket_status(ticket_id):
                 )
             connection.commit()
     except psycopg.Error:
-        current_app.logger.error("Unable to update ticket status.")
+        current_app.logger.error("Unable to update ticket status.", exc_info=True)
         try:
             connection.rollback()
         except Exception:
@@ -1024,7 +1024,7 @@ def update_ticket_assignment(ticket_id):
                     assert updated_ticket is not None
             connection.commit()
     except psycopg.Error:
-        current_app.logger.error("Unable to update ticket assignment.")
+        current_app.logger.error("Unable to update ticket assignment.", exc_info=True)
         return error_response(
             code="INTERNAL_SERVER_ERROR",
             message="An unexpected server error occurred.",

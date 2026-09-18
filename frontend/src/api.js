@@ -96,6 +96,14 @@ export function changePassword(passwords) {
   })
 }
 
+export async function createTicket(ticketData) {
+  const payload = await apiRequest('/api/tickets', {
+    method: 'POST',
+    body: ticketData,
+  })
+  return payload.data
+}
+
 export async function getTickets(params = {}) {
   const searchParams = new URLSearchParams()
 

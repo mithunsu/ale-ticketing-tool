@@ -278,6 +278,81 @@ p {
   font-size: 0.9rem;
 }
 
+.ticket-form {
+  display: grid;
+  max-width: 58rem;
+  gap: 1.5rem;
+}
+
+.ticket-form-section {
+  display: grid;
+  gap: 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+.ticket-form-section h2 {
+  margin: 0;
+  color: #1f2937;
+  font-size: 1.15rem;
+}
+
+.ticket-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: #374151;
+  font-weight: 600;
+}
+
+.ticket-form input,
+.ticket-form select,
+.ticket-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.625rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
+  font: inherit;
+  font-weight: 400;
+}
+
+.ticket-form textarea {
+  resize: vertical;
+}
+
+.ticket-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.ticket-form-field-wide {
+  grid-column: 1 / -1;
+}
+
+.ticket-form > button {
+  justify-self: start;
+  min-height: 2.75rem;
+  padding: 0.625rem 1rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.ticket-form > button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.form-success,
+.form-success-detail {
+  color: #087443;
+}
+
+.form-success-detail {
+  margin-top: -1rem;
+  font-size: 0.95rem;
+}
+
 @media (max-width: 700px) {
   .app-header {
     align-items: flex-start;
@@ -302,5 +377,13 @@ p {
   .ticket-metadata,
   .setup-snapshot {
     grid-template-columns: 1fr;
+  }
+
+  .ticket-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ticket-form-field-wide {
+    grid-column: auto;
   }
 }

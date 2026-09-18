@@ -4,6 +4,7 @@ import { getCurrentUser, logout } from './api'
 import './App.css'
 import ActiveTicketsPage from './components/ActiveTicketsPage'
 import ClosedTicketsPage from './components/ClosedTicketsPage'
+import CreateTicketPage from './components/CreateTicketPage'
 import LoginPage from './components/LoginPage'
 import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
@@ -121,6 +122,7 @@ function App() {
         {currentView === 'closed-tickets' && (
           <ClosedTicketsPage onSelectTicket={handleSelectTicket} />
         )}
+        {currentView === 'create-ticket' && <CreateTicketPage />}
         {currentView === 'ticket-detail' && (
           <TicketDetailPage ticketId={selectedTicketId} onBack={handleBackFromTicketDetail} />
         )}
