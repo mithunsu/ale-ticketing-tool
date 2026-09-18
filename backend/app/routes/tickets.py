@@ -221,6 +221,17 @@ def list_tickets():
         else:
             status_not = raw_status_not
 
+    raw_status = request.args.get("status")
+    status = None
+    if raw_status is not None:
+        if raw_status not in VALID_TICKET_STATUS_VALUES:
+            errors["status"] = f"Must be one of: {', '.join(VALID_TICKET_STATUS_VALUES)}."
+        else:
+            status = raw_status
+
+    if raw_status is not None and raw_status_not is not None:
+        errors["status"] = "Cannot be combined with status_not."
+
     if errors:
         return validation_error_response(details=errors)
 
@@ -260,6 +271,15 @@ def list_tickets():
                 + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
             )
             params = (str(g.current_user["id"]), status_not, limit, offset)
+        elif status is not None:
+            count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s AND status = %s;"
+            count_params = (str(g.current_user["id"]), status)
+            query = (
+                base_query
+                + "\n        WHERE t.requester_id = %s AND t.status = %s"
+                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+            )
+            params = (str(g.current_user["id"]), status, limit, offset)
         else:
             count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s;"
             count_params = (str(g.current_user["id"]),)
@@ -275,6 +295,15 @@ def list_tickets():
                 + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
             )
             params = (status_not, limit, offset)
+        elif status is not None:
+            count_query = "SELECT COUNT(*) FROM tickets WHERE status = %s;"
+            count_params = (status,)
+            query = (
+                base_query
+                + "\n        WHERE t.status = %s"
+                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+            )
+            params = (status, limit, offset)
         else:
             count_query = "SELECT COUNT(*) FROM tickets;"
             count_params = None

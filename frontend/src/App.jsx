@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { getCurrentUser, logout } from './api'
 import './App.css'
 import ActiveTicketsPage from './components/ActiveTicketsPage'
+import ClosedTicketsPage from './components/ClosedTicketsPage'
 import LoginPage from './components/LoginPage'
 import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
@@ -105,6 +106,9 @@ function App() {
         <h1>{viewLabels[currentView]}</h1>
         {currentView === 'active-tickets' && (
           <ActiveTicketsPage onSelectTicket={handleSelectTicket} />
+        )}
+        {currentView === 'closed-tickets' && (
+          <ClosedTicketsPage onSelectTicket={handleSelectTicket} />
         )}
         {currentView === 'ticket-detail' && (
           <p>Ticket ID: {selectedTicketId}</p>

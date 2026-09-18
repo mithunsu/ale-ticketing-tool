@@ -864,6 +864,162 @@ def test_status_not_with_pagination_parameters(monkeypatch):
     assert data_params == ("Closed", 10, 10)
 
 
+def test_status_closed_is_accepted(monkeypatch):
+    row = _sample_ticket_list_row()
+    cursor = _StubCursor(tickets=[row], count=1)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status=Closed")
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["pagination"]["total"] == 1
+
+
+def test_status_added_to_count_and_select_queries(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status=Closed")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert "status = %s" in count_query
+    assert "t.status = %s" in data_query
+    assert count_params == ("Closed",)
+    assert data_params == ("Closed", 10, 0)
+
+
+def test_status_is_bound_parameter_not_interpolated(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status=Closed")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert "Closed" not in count_query and "Closed" not in data_query
+    assert "Closed" in count_params and "Closed" in data_params
+
+
+def test_requester_visibility_combines_with_status(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="requester", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status=Closed")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert "WHERE requester_id = %s AND status = %s" in count_query
+    assert count_params == ("user-1", "Closed")
+    assert "WHERE t.requester_id = %s AND t.status = %s" in data_query
+    assert data_params == ("user-1", "Closed", 10, 0)
+
+
+@pytest.mark.parametrize("role", ["support_engineer", "manager", "admin"])
+def test_privileged_roles_combine_with_status(monkeypatch, role):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role=role, cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status=Closed")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert "requester_id" not in count_query
+    assert count_params == ("Closed",)
+    assert "WHERE t.requester_id" not in data_query
+    assert data_params == ("Closed", 10, 0)
+
+
+def test_invalid_status_returns_400(monkeypatch):
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin")
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status=NotAStatus")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "status" in response.get_json()["error"]["details"]
+    assert cursor.executed == []
+
+
+def test_status_and_status_not_together_returns_400(monkeypatch):
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin")
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status=Closed&status_not=Open")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
+    assert cursor.executed == []
+
+
+def test_status_absent_preserves_existing_query_behavior(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert count_query == "SELECT COUNT(*) FROM tickets;"
+    assert count_params is None
+    assert "WHERE" not in data_query
+    assert data_params == (10, 0)
+
+
+def test_status_not_still_works_alongside_status_support(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?status_not=Closed")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert "status <> %s" in count_query
+    assert "t.status <> %s" in data_query
+    assert count_params == ("Closed",)
+    assert data_params == ("Closed", 10, 0)
+
+
+def test_status_with_pagination_parameters(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=35)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?page=2&limit=10&status=Closed")
+
+    assert response.status_code == 200
+    pagination = response.get_json()["data"]["pagination"]
+    assert pagination == {"page": 2, "limit": 10, "total": 35, "total_pages": 4}
+    _count_query, count_params = cursor.executed[0]
+    _data_query, data_params = cursor.executed[1]
+    assert count_params == ("Closed",)
+    assert data_params == ("Closed", 10, 10)
+
+
 def test_list_includes_assignee_name_for_assigned_ticket(monkeypatch):
     row = _sample_ticket_list_row(assigned_to="engineer-1", assignee_name="Sam Support")
     cursor = _StubCursor(tickets=[row], count=1)
