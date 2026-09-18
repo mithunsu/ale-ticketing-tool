@@ -109,3 +109,8 @@ export async function getTickets(params = {}) {
   const payload = await apiRequest(queryString ? `/api/tickets?${queryString}` : '/api/tickets')
   return payload.data
 }
+
+export async function getTicket(ticketId) {
+  const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}`)
+  return payload.data
+}

@@ -7,6 +7,7 @@ import ClosedTicketsPage from './components/ClosedTicketsPage'
 import LoginPage from './components/LoginPage'
 import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
+import TicketDetailPage from './components/TicketDetailPage'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)
@@ -14,6 +15,7 @@ function App() {
   const [authError, setAuthError] = useState(null)
   const [currentView, setCurrentView] = useState('active-tickets')
   const [selectedTicketId, setSelectedTicketId] = useState(null)
+  const [ticketDetailReturnView, setTicketDetailReturnView] = useState('active-tickets')
 
   function handleLoginSuccess(user) {
     setAuthError(null)
@@ -65,8 +67,17 @@ function App() {
   }
 
   function handleSelectTicket(ticketId) {
+    if (currentView === 'active-tickets' || currentView === 'closed-tickets') {
+      setTicketDetailReturnView(currentView)
+    }
     setSelectedTicketId(ticketId)
     setCurrentView('ticket-detail')
+  }
+
+  function handleBackFromTicketDetail() {
+    setCurrentView(
+      ticketDetailReturnView === 'closed-tickets' ? 'closed-tickets' : 'active-tickets',
+    )
   }
 
   if (authLoading) {
@@ -111,7 +122,7 @@ function App() {
           <ClosedTicketsPage onSelectTicket={handleSelectTicket} />
         )}
         {currentView === 'ticket-detail' && (
-          <p>Ticket ID: {selectedTicketId}</p>
+          <TicketDetailPage ticketId={selectedTicketId} onBack={handleBackFromTicketDetail} />
         )}
       </main>
     </div>
