@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { getCurrentUser, logout } from './api'
 import './App.css'
+import ActiveTicketsPage from './components/ActiveTicketsPage'
 import LoginPage from './components/LoginPage'
 import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
@@ -11,6 +12,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState(null)
   const [currentView, setCurrentView] = useState('active-tickets')
+  const [selectedTicketId, setSelectedTicketId] = useState(null)
 
   function handleLoginSuccess(user) {
     setAuthError(null)
@@ -61,6 +63,11 @@ function App() {
     setAuthError('Password changed successfully. Please sign in again.')
   }
 
+  function handleSelectTicket(ticketId) {
+    setSelectedTicketId(ticketId)
+    setCurrentView('ticket-detail')
+  }
+
   if (authLoading) {
     return <div className="container">Checking session...</div>
   }
@@ -82,6 +89,7 @@ function App() {
     'active-tickets': 'Active Tickets',
     'create-ticket': 'Create Ticket',
     'closed-tickets': 'Closed Tickets',
+    'ticket-detail': 'Ticket Detail',
   }
 
   return (
@@ -95,6 +103,12 @@ function App() {
       {authError && <p role="alert">{authError}</p>}
       <main className="app-content">
         <h1>{viewLabels[currentView]}</h1>
+        {currentView === 'active-tickets' && (
+          <ActiveTicketsPage onSelectTicket={handleSelectTicket} />
+        )}
+        {currentView === 'ticket-detail' && (
+          <p>Ticket ID: {selectedTicketId}</p>
+        )}
       </main>
     </div>
   )

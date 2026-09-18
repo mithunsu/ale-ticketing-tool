@@ -95,3 +95,17 @@ export function changePassword(passwords) {
     body: passwords,
   })
 }
+
+export async function getTickets(params = {}) {
+  const searchParams = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.set(key, value)
+    }
+  })
+
+  const queryString = searchParams.toString()
+  const payload = await apiRequest(queryString ? `/api/tickets?${queryString}` : '/api/tickets')
+  return payload.data
+}
