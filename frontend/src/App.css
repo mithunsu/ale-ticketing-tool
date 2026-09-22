@@ -211,6 +211,25 @@ p {
   font-size: 1.15rem;
 }
 
+.assignment-controls {
+  margin-top: 1rem;
+  display: grid;
+  justify-items: start;
+  gap: 0.5rem;
+}
+
+.assignment-controls button {
+  min-height: 2.5rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.assignment-controls button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .ticket-summary {
   display: flex;
   align-items: flex-start;

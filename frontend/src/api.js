@@ -122,3 +122,11 @@ export async function getTicket(ticketId) {
   const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}`)
   return payload.data
 }
+
+export async function assignTicket(ticketId, assignedTo) {
+  const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}/assignment`, {
+    method: 'PATCH',
+    body: { assigned_to: assignedTo },
+  })
+  return payload.data
+}

@@ -124,7 +124,11 @@ function App() {
         )}
         {currentView === 'create-ticket' && <CreateTicketPage />}
         {currentView === 'ticket-detail' && (
-          <TicketDetailPage ticketId={selectedTicketId} onBack={handleBackFromTicketDetail} />
+          <TicketDetailPage
+            ticketId={selectedTicketId}
+            currentUser={currentUser}
+            onBack={handleBackFromTicketDetail}
+          />
         )}
       </main>
     </div>

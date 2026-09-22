@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { getTicket } from '../api'
+import { assignTicket, getTicket } from '../api'
 
 function formatDate(value) {
   if (!value) {
@@ -11,11 +11,24 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-function TicketDetailPage({ ticketId, onBack }) {
+function TicketDetailPage({ ticketId, currentUser, onBack }) {
   const [ticket, setTicket] = useState(null)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(Boolean(ticketId))
   const [error, setError] = useState(null)
+  const [assigning, setAssigning] = useState(false)
+  const [assignmentError, setAssignmentError] = useState(null)
+  const [assignmentSuccess, setAssignmentSuccess] = useState(null)
+
+  async function loadTicket() {
+    try {
+      const data = await getTicket(ticketId)
+      setTicket(data.ticket)
+      setHistory(data.history || [])
+    } catch (requestError) {
+      setAssignmentError(requestError.message)
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -30,7 +43,7 @@ function TicketDetailPage({ ticketId, onBack }) {
       }
     }
 
-    async function loadTicket() {
+    async function loadInitialTicket() {
       setLoading(true)
       setError(null)
 
@@ -55,12 +68,30 @@ function TicketDetailPage({ ticketId, onBack }) {
       }
     }
 
-    loadTicket()
+    loadInitialTicket()
 
     return () => {
       active = false
     }
   }, [ticketId])
+
+  async function handleAssignToMe() {
+    setAssigning(true)
+    setAssignmentError(null)
+    setAssignmentSuccess(null)
+
+    try {
+      await assignTicket(ticketId, currentUser.id)
+      setAssignmentSuccess('Ticket assigned successfully.')
+      await loadTicket()
+    } catch (requestError) {
+      setAssignmentError(requestError.message)
+      // The server may have changed the ticket even though this request failed; reflect that state.
+      await loadTicket()
+    } finally {
+      setAssigning(false)
+    }
+  }
 
   if (loading) {
     return <p>Loading ticket...</p>
@@ -104,9 +135,23 @@ function TicketDetailPage({ ticketId, onBack }) {
         <dl className="ticket-metadata">
           <div><dt>Requester</dt><dd>{ticket.requester_name || 'Not provided'}</dd></div>
           {ticket.requester_email && <div><dt>Requester Email</dt><dd>{ticket.requester_email}</dd></div>}
-          {ticket.assigned_to && <div><dt>Assigned To</dt><dd>{ticket.assigned_to}</dd></div>}
+          {ticket.assigned_to && (
+            <div>
+              <dt>Assigned To</dt>
+              <dd>{ticket.assigned_to === currentUser?.id ? `${currentUser.name} (You)` : ticket.assigned_to}</dd>
+            </div>
+          )}
           {!ticket.assigned_to && <div><dt>Assigned To</dt><dd>Unassigned</dd></div>}
         </dl>
+        {currentUser?.role === 'support_engineer' && !ticket.assigned_to && (
+          <div className="assignment-controls">
+            <button type="button" onClick={handleAssignToMe} disabled={assigning}>
+              {assigning ? 'Assigning...' : 'Assign to me'}
+            </button>
+            {assignmentSuccess && <p className="form-success" role="status">{assignmentSuccess}</p>}
+            {assignmentError && <p className="form-error" role="alert">{assignmentError}</p>}
+          </div>
+        )}
       </section>
 
       <section className="ticket-detail-section">
