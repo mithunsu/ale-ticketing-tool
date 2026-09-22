@@ -1526,21 +1526,29 @@ def test_allowed_status_transitions_succeed(monkeypatch, current_status, target_
     )
     app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
 
+    body = {"status": target_status}
+    if target_status == "Resolved":
+        body["resolution"] = "Fixed the issue."
+
     with app.test_client() as client:
         _authenticate_assignment_user(client)
         response = client.patch(
             f"/api/tickets/{TICKET_ID}/status",
-            json={"status": target_status},
+            json=body,
             headers=_assignment_headers(client),
         )
 
     assert response.status_code == 200
     assert response.get_json()["data"]["ticket"]["status"] == target_status
     assert connection.committed is True
-    assert len(cursor.executed) == 3
+    assert len(cursor.executed) == 4 if target_status == "Resolved" else len(cursor.executed) == 3
     assert "UPDATE tickets" in cursor.executed[1][0]
     assert "WHERE id = %s AND status = %s" in cursor.executed[1][0]
-    assert cursor.executed[1][1] == (target_status, TICKET_ID, current_status, CURRENT_USER_ID)
+    if target_status == "Resolved":
+        assert cursor.executed[1][1] == (target_status, "Fixed the issue.", TICKET_ID, current_status, CURRENT_USER_ID)
+        assert "INSERT INTO ticket_comments" in cursor.executed[3][0]
+    else:
+        assert cursor.executed[1][1] == (target_status, TICKET_ID, current_status, CURRENT_USER_ID)
     assert "INSERT INTO ticket_history" in cursor.executed[2][0]
 
 
@@ -1672,6 +1680,306 @@ def test_concurrent_status_change_returns_conflict_and_no_history(monkeypatch):
     assert connection.committed is False
     assert len(cursor.executed) >= 3
     assert all("INSERT INTO ticket_history" not in query.lower() for query, _ in cursor.executed)
+
+
+def test_resolve_with_valid_resolution_succeeds(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="In Progress", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            (TICKET_ID, "Resolved", CURRENT_USER_ID, updated_at, None),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Resolved", "resolution": "Replaced faulty cable."},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["status"] == "Resolved"
+    assert connection.committed is True
+    assert "INSERT INTO ticket_history" in cursor.executed[2][0]
+    assert "INSERT INTO ticket_comments" in cursor.executed[3][0]
+
+
+def test_resolve_creates_public_comment_with_resolution_text(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="In Progress", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            (TICKET_ID, "Resolved", CURRENT_USER_ID, updated_at, None),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Resolved", "resolution": "  Replaced faulty cable.  "},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert connection.committed is True
+    comment_query, comment_params = cursor.executed[3]
+    assert "INSERT INTO ticket_comments" in comment_query
+    assert "'public'" in comment_query
+    assert comment_params == (TICKET_ID, CURRENT_USER_ID, "Replaced faulty cable.")
+
+
+def test_non_resolved_transition_does_not_create_comment(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="New", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            (TICKET_ID, "Open", CURRENT_USER_ID, updated_at, None),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+
+    assert connection.committed is True
+    assert len(cursor.executed) == 3
+    assert all("INSERT INTO ticket_comments" not in query for query, _ in cursor.executed)
+
+
+@pytest.mark.parametrize("body", [{"status": "Resolved"}, {"status": "Resolved", "resolution": ""}])
+def test_resolve_without_resolution_returns_400(monkeypatch, body):
+    cursor = _StubCursor(fetchone_results=[_status_ticket(status="In Progress", assigned_to=CURRENT_USER_ID)])
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json=body,
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "resolution" in response.get_json()["error"]["details"]
+    assert connection.committed is False
+    assert len(cursor.executed) == 1
+
+
+def test_resolve_with_whitespace_only_resolution_returns_400(monkeypatch):
+    cursor = _StubCursor(fetchone_results=[_status_ticket(status="In Progress", assigned_to=CURRENT_USER_ID)])
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Resolved", "resolution": "   "},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 400
+    assert "resolution" in response.get_json()["error"]["details"]
+    assert connection.committed is False
+    assert len(cursor.executed) == 1
+
+
+def test_resolve_update_sql_sets_status_and_resolution_together(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="In Progress", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            (TICKET_ID, "Resolved", CURRENT_USER_ID, updated_at, None),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Resolved", "resolution": "  Replaced faulty cable.  "},
+            headers=_assignment_headers(client),
+        )
+
+    update_query, update_params = cursor.executed[1]
+    assert "SET status = %s, resolution = %s" in update_query
+    assert update_params == ("Resolved", "Replaced faulty cable.", TICKET_ID, "In Progress", CURRENT_USER_ID)
+
+
+def test_non_resolved_transition_leaves_resolution_untouched(monkeypatch):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="New", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            (TICKET_ID, "Open", CURRENT_USER_ID, updated_at, None),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "Open"},
+            headers=_assignment_headers(client),
+        )
+
+    update_query, update_params = cursor.executed[1]
+    assert "SET status = %s, resolution = resolution" in update_query
+    assert update_params == ("Open", TICKET_ID, "New", CURRENT_USER_ID)
+
+
+def test_resolve_history_insert_rollback_reverts_status_and_resolution_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    user_id = test_db["user_id"]
+    db_config = test_db["config"]
+
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (name, email, role, department, status, password_hash, must_change_password) VALUES (%s, %s, %s, %s, 'active', 'hash', false) RETURNING id;",
+                ("Engineer", "resolve-rollback-engineer@example.com", "support_engineer", "Ops"),
+            )
+            engineer_id = str(cur.fetchone()[0])
+            cur.execute(
+                "INSERT INTO tickets (title, description, setup_snapshot, requester_id, status, assigned_to) VALUES (%s, %s, %s, %s, 'In Progress', %s) RETURNING id;",
+                (
+                    "Resolve rollback test",
+                    "Description",
+                    Jsonb({"server_name": "lab-1", "server_ip": "10.0.0.1", "platform": "ALE", "dut": "router"}),
+                    user_id,
+                    engineer_id,
+                ),
+            )
+            ticket_id = str(cur.fetchone()[0])
+
+    trigger_sql = """
+    CREATE OR REPLACE FUNCTION _test_fail_status_history()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        IF NEW.action = 'STATUS_CHANGED' THEN
+            RAISE EXCEPTION 'Simulated status history insert failure';
+        END IF;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER _test_reject_status_history_trigger
+    BEFORE INSERT ON ticket_history
+    FOR EACH ROW
+    EXECUTE FUNCTION _test_fail_status_history();
+    """
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(trigger_sql)
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = engineer_id
+
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status",
+            json={"status": "Resolved", "resolution": "Root cause identified and fixed."},
+            headers=csrf_headers(client),
+        )
+
+    assert response.status_code == 500
+    assert response.get_json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+
+    with psycopg.connect(**db_config) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, resolution FROM tickets WHERE id = %s;", (ticket_id,))
+            row = cur.fetchone()
+            assert row[0] == "In Progress"
+            assert row[1] is None
+            cur.execute("SELECT COUNT(*) FROM ticket_history WHERE ticket_id = %s AND action = 'STATUS_CHANGED';", (ticket_id,))
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM ticket_comments WHERE ticket_id = %s;", (ticket_id,))
+            assert cur.fetchone()[0] == 0
+
+
+def test_resolve_comment_insert_rollback_reverts_status_and_history_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    user_id = test_db["user_id"]
+    db_config = test_db["config"]
+
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (name, email, role, department, status, password_hash, must_change_password) VALUES (%s, %s, %s, %s, 'active', 'hash', false) RETURNING id;",
+                ("Engineer", "resolve-comment-rollback-engineer@example.com", "support_engineer", "Ops"),
+            )
+            engineer_id = str(cur.fetchone()[0])
+            cur.execute(
+                "INSERT INTO tickets (title, description, setup_snapshot, requester_id, status, assigned_to) VALUES (%s, %s, %s, %s, 'In Progress', %s) RETURNING id;",
+                (
+                    "Resolve comment rollback test",
+                    "Description",
+                    Jsonb({"server_name": "lab-1", "server_ip": "10.0.0.1", "platform": "ALE", "dut": "router"}),
+                    user_id,
+                    engineer_id,
+                ),
+            )
+            ticket_id = str(cur.fetchone()[0])
+
+    trigger_sql = """
+    CREATE OR REPLACE FUNCTION _test_fail_resolution_comment()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        RAISE EXCEPTION 'Simulated ticket comment insert failure';
+    END;
+    $$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER _test_reject_resolution_comment_trigger
+    BEFORE INSERT ON ticket_comments
+    FOR EACH ROW
+    EXECUTE FUNCTION _test_fail_resolution_comment();
+    """
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(trigger_sql)
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = engineer_id
+
+        response = client.patch(
+            f"/api/tickets/{ticket_id}/status",
+            json={"status": "Resolved", "resolution": "Root cause identified and fixed."},
+            headers=csrf_headers(client),
+        )
+
+    assert response.status_code == 500
+    assert response.get_json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+
+    with psycopg.connect(**db_config) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, resolution FROM tickets WHERE id = %s;", (ticket_id,))
+            row = cur.fetchone()
+            assert row[0] == "In Progress"
+            assert row[1] is None
+            cur.execute("SELECT COUNT(*) FROM ticket_history WHERE ticket_id = %s AND action = 'STATUS_CHANGED';", (ticket_id,))
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT COUNT(*) FROM ticket_comments WHERE ticket_id = %s;", (ticket_id,))
+            assert cur.fetchone()[0] == 0
 
 
 def test_status_history_insert_rollback_reverts_status_in_real_postgres(postgres_disposable_db):

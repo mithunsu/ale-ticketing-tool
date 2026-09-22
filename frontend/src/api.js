@@ -123,10 +123,11 @@ export async function getTicket(ticketId) {
   return payload.data
 }
 
-export async function updateTicketStatus(ticketId, status) {
+export async function updateTicketStatus(ticketId, status, resolution) {
+  const body = resolution === undefined ? { status } : { status, resolution }
   const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}/status`, {
     method: 'PATCH',
-    body: { status },
+    body,
   })
   return payload.data
 }

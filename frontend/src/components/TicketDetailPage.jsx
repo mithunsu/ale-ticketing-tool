@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, updateTicketStatus } from '../api'
 
@@ -9,6 +9,19 @@ function formatDate(value) {
 
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+// Renders the existing ticket_history.action value without inventing new semantics for actions we don't special-case.
+function formatHistoryAction(entry) {
+  if (entry.action === 'STATUS_CHANGED') {
+    return `Changed status: ${entry.old_status || 'None'} \u2192 ${entry.new_status || 'None'}`
+  }
+
+  return entry.action
+    .toLowerCase()
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
 }
 
 // Mirrors the backend's ALLOWED_STATUS_TRANSITIONS graph; Flask remains authoritative regardless of what is shown here.
@@ -59,6 +72,7 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
   const [statusUpdating, setStatusUpdating] = useState(false)
   const [statusError, setStatusError] = useState(null)
   const [statusSuccess, setStatusSuccess] = useState(null)
+  const [resolutionDraft, setResolutionDraft] = useState('')
   const [comments, setComments] = useState([])
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentsError, setCommentsError] = useState(null)
@@ -164,6 +178,35 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
     setSelectedAssignee(ticket?.assigned_to || '')
   }, [ticket?.assigned_to])
 
+  // history and comments stay the source of truth; activity is only ever derived from them, never stored separately.
+  const activityFeed = useMemo(() => {
+    const historyActivity = history.map((entry) => ({
+      activityType: 'history',
+      id: entry.id,
+      created_at: entry.created_at,
+      data: entry,
+    }))
+    const commentActivity = comments.map((comment) => ({
+      activityType: 'comment',
+      id: comment.id,
+      created_at: comment.created_at,
+      data: comment,
+    }))
+
+    return [...historyActivity, ...commentActivity].sort((a, b) => {
+      const aTime = new Date(a.created_at).getTime()
+      const bTime = new Date(b.created_at).getTime()
+      if (aTime !== bTime) {
+        return bTime - aTime
+      }
+
+      // deterministic tie-breaker for equal timestamps: composite of activity type + id
+      const aKey = `${a.activityType}-${a.id}`
+      const bKey = `${b.activityType}-${b.id}`
+      return aKey > bKey ? -1 : aKey < bKey ? 1 : 0
+    })
+  }, [history, comments])
+
   async function loadComments() {
     try {
       const data = await getTicketComments(ticketId)
@@ -247,14 +290,30 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
   }
 
   async function handleStatusTransition(targetStatus) {
+    let resolutionToSend
+
+    if (targetStatus === 'Resolved') {
+      const trimmedResolution = resolutionDraft.trim()
+      if (!trimmedResolution) {
+        setStatusError('Resolution is required to resolve a ticket.')
+        return
+      }
+      resolutionToSend = trimmedResolution
+    }
+
     setStatusUpdating(true)
     setStatusError(null)
     setStatusSuccess(null)
 
     try {
-      await updateTicketStatus(ticketId, targetStatus)
+      await updateTicketStatus(ticketId, targetStatus, resolutionToSend)
       setStatusSuccess('Ticket status updated successfully.')
+      setResolutionDraft('')
       await loadTicket()
+      // resolving creates a ticket comment server-side, so refresh comments too
+      if (targetStatus === 'Resolved') {
+        await loadComments()
+      }
     } catch (requestError) {
       setStatusError(requestError.message)
       // The server may have changed the ticket even though this request failed; reflect that state.
@@ -330,12 +389,25 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
         </dl>
         {statusActions.length > 0 && (
           <div className="status-actions">
+            {statusActions.some((action) => action.target === 'Resolved') && (
+              <label>
+                Resolution
+                <textarea
+                  aria-label="Resolution"
+                  value={resolutionDraft}
+                  onChange={(event) => setResolutionDraft(event.target.value)}
+                  disabled={statusUpdating}
+                  rows={3}
+                  required
+                />
+              </label>
+            )}
             {statusActions.map((action) => (
               <button
                 key={action.target}
                 type="button"
                 onClick={() => handleStatusTransition(action.target)}
-                disabled={statusUpdating}
+                disabled={statusUpdating || (action.target === 'Resolved' && resolutionDraft.trim() === '')}
               >
                 {statusUpdating ? 'Updating status...' : action.label}
               </button>
@@ -451,38 +523,29 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
       </section>
 
       <section className="ticket-detail-section">
-        <h2>History</h2>
-        {history.length === 0 ? (
-          <p>No history entries.</p>
-        ) : (
-          <ol className="ticket-history">
-            {history.map((entry) => (
-              <li key={entry.id}>
-                <strong>{entry.action}</strong>
-                <span>{entry.old_status || 'None'} to {entry.new_status || 'None'}</span>
-                <span>{entry.actor_name || entry.actor_email || 'System'} · {formatDate(entry.created_at)}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
-
-      <section className="ticket-detail-section">
-        <h2>Comments</h2>
+        <h2>Activity</h2>
         {commentsError && <p className="form-error" role="alert">{commentsError}</p>}
-        {!commentsError && commentsLoading && <p>Loading comments...</p>}
-        {!commentsError && !commentsLoading && comments.length === 0 && <p>No comments yet.</p>}
-        {!commentsError && !commentsLoading && comments.length > 0 && (
-          <ol className="ticket-comments">
-            {comments.map((comment) => (
-              <li key={comment.id}>
-                <strong>{comment.author_name || comment.author_email || 'Unknown'}</strong>
-                <p className="ticket-description">{comment.comment}</p>
-                <span>{formatDate(comment.created_at)}</span>
-              </li>
+        {activityFeed.length === 0 && !commentsLoading && <p>No activity yet.</p>}
+        {activityFeed.length > 0 && (
+          <ol className="ticket-activity">
+            {activityFeed.map((item) => (
+              item.activityType === 'history' ? (
+                <li key={`history-${item.id}`} className="activity-entry activity-entry-history">
+                  <strong>{item.data.actor_name || item.data.actor_email || 'System'}</strong>
+                  <span>{formatHistoryAction(item.data)}</span>
+                  <span>{formatDate(item.data.created_at)}</span>
+                </li>
+              ) : (
+                <li key={`comment-${item.id}`} className="activity-entry activity-entry-comment">
+                  <strong>{item.data.author_name || item.data.author_email || 'Unknown'}</strong>
+                  <p className="ticket-description">{item.data.comment}</p>
+                  <span>{formatDate(item.data.created_at)}</span>
+                </li>
+              )
             ))}
           </ol>
         )}
+        {commentsLoading && <p>Loading comments...</p>}
 
         <form className="comment-form" onSubmit={handleSubmitComment}>
           <textarea

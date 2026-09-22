@@ -300,38 +300,32 @@ p {
   white-space: pre-wrap;
 }
 
-.ticket-history {
-  display: grid;
-  gap: 0.75rem;
-  margin: 0;
-  padding-left: 1.5rem;
-}
-
-.ticket-history li {
-  display: grid;
-  gap: 0.2rem;
-}
-
-.ticket-history span {
-  color: #6b7280;
-  font-size: 0.9rem;
-}
-
-.ticket-comments {
+.ticket-activity {
   display: grid;
   gap: 1rem;
   margin: 0 0 1.5rem;
   padding-left: 1.5rem;
 }
 
-.ticket-comments li {
+.activity-entry {
   display: grid;
   gap: 0.2rem;
 }
 
-.ticket-comments span {
+.activity-entry span {
   color: #6b7280;
   font-size: 0.9rem;
+}
+
+.activity-entry-history {
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+
+.activity-entry-comment {
+  padding: 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
 }
 
 .comment-form {

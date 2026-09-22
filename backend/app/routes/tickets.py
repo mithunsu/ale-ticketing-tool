@@ -744,7 +744,13 @@ def update_ticket_status(ticket_id):
         return parse_error
     assert payload is not None
 
-    normalized, errors = validate_object(payload, {"status": {"required": True, "type": str}})
+    normalized, errors = validate_object(
+        payload,
+        {
+            "status": {"required": True, "type": str},
+            "resolution": {"type": str},
+        },
+    )
     if errors is not None:
         return validation_error_response(details=errors)
     assert normalized is not None
@@ -752,6 +758,9 @@ def update_ticket_status(ticket_id):
     target_status = normalized["status"]
     if target_status not in VALID_TICKET_STATUS_VALUES:
         return validation_error_response(details={"status": "Unsupported ticket status."})
+
+    # resolution is only required when resolving; validate_object already trims whitespace for us
+    resolution = normalized.get("resolution")
 
     current_user_id = str(current_user["id"])
 
@@ -811,6 +820,9 @@ def update_ticket_status(ticket_id):
                 if (current_status, target_status) not in ALLOWED_STATUS_TRANSITIONS:
                     return validation_error_response(details={"status": "Invalid status transition."})
 
+                if target_status == "Resolved" and not resolution:
+                    return validation_error_response(details={"resolution": "This field is required."})
+
                 # closed_at is derived server-side only; the client cannot set or override it.
                 if target_status == "Closed":
                     closed_at_assignment = "CURRENT_TIMESTAMP"
@@ -819,15 +831,24 @@ def update_ticket_status(ticket_id):
                 else:
                     closed_at_assignment = "closed_at"
 
+                # resolution is written only when resolving; other transitions leave the existing value untouched.
+                if target_status == "Resolved":
+                    resolution_assignment = "%s"
+                    resolution_params = (resolution,)
+                else:
+                    resolution_assignment = "resolution"
+                    resolution_params = ()
+
                 update_sql = (
-                    f"UPDATE tickets SET status = %s, closed_at = {closed_at_assignment}, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = %s AND status = %s"
+                    f"UPDATE tickets SET status = %s, resolution = {resolution_assignment}, "
+                    f"closed_at = {closed_at_assignment}, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = %s AND status = %s"
                 )
                 if current_user["role"] == "support_engineer":
                     update_sql += " AND assigned_to = %s"
-                    update_params = (target_status, ticket_id, current_status, current_user_id)
+                    update_params = (target_status, *resolution_params, ticket_id, current_status, current_user_id)
                 else:
-                    update_params = (target_status, ticket_id, current_status)
+                    update_params = (target_status, *resolution_params, ticket_id, current_status)
                 update_sql += " RETURNING id, status, assigned_to, updated_at, closed_at;"
 
                 cursor.execute(update_sql, update_params)
@@ -868,6 +889,16 @@ def update_ticket_status(ticket_id):
                     """,
                     (str(updated_ticket[0]), current_user_id, current_status, target_status),
                 )
+
+                # the resolution is also recorded as a normal public comment so it shows up in the comment history
+                if target_status == "Resolved":
+                    cursor.execute(
+                        """
+                        INSERT INTO ticket_comments (ticket_id, author_id, comment_text, comment_type)
+                        VALUES (%s, %s, %s, 'public');
+                        """,
+                        (str(updated_ticket[0]), current_user_id, resolution),
+                    )
             connection.commit()
     except psycopg.Error:
         current_app.logger.error("Unable to update ticket status.", exc_info=True)
