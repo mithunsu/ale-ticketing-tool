@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { assignTicket, getTicket } from '../api'
+import { assignTicket, getAssignableUsers, getTicket } from '../api'
 
 function formatDate(value) {
   if (!value) {
@@ -19,6 +19,12 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
   const [assigning, setAssigning] = useState(false)
   const [assignmentError, setAssignmentError] = useState(null)
   const [assignmentSuccess, setAssignmentSuccess] = useState(null)
+  const [assignableUsers, setAssignableUsers] = useState([])
+  const [assignableUsersLoading, setAssignableUsersLoading] = useState(false)
+  const [assignableUsersError, setAssignableUsersError] = useState(null)
+  const [selectedAssignee, setSelectedAssignee] = useState('')
+
+  const canManageAssignment = currentUser?.role === 'manager' || currentUser?.role === 'admin'
 
   async function loadTicket() {
     try {
@@ -75,6 +81,46 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
     }
   }, [ticketId])
 
+  useEffect(() => {
+    let active = true
+
+    if (!canManageAssignment) {
+      return () => {
+        active = false
+      }
+    }
+
+    async function loadAssignableUsers() {
+      setAssignableUsersLoading(true)
+      setAssignableUsersError(null)
+
+      try {
+        const users = await getAssignableUsers()
+        if (active) {
+          setAssignableUsers(users)
+        }
+      } catch (requestError) {
+        if (active) {
+          setAssignableUsersError(requestError.message)
+        }
+      } finally {
+        if (active) {
+          setAssignableUsersLoading(false)
+        }
+      }
+    }
+
+    loadAssignableUsers()
+
+    return () => {
+      active = false
+    }
+  }, [canManageAssignment])
+
+  useEffect(() => {
+    setSelectedAssignee(ticket?.assigned_to || '')
+  }, [ticket?.assigned_to])
+
   async function handleAssignToMe() {
     setAssigning(true)
     setAssignmentError(null)
@@ -83,6 +129,24 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
     try {
       await assignTicket(ticketId, currentUser.id)
       setAssignmentSuccess('Ticket assigned successfully.')
+      await loadTicket()
+    } catch (requestError) {
+      setAssignmentError(requestError.message)
+      // The server may have changed the ticket even though this request failed; reflect that state.
+      await loadTicket()
+    } finally {
+      setAssigning(false)
+    }
+  }
+
+  async function handleUpdateAssignment() {
+    setAssigning(true)
+    setAssignmentError(null)
+    setAssignmentSuccess(null)
+
+    try {
+      await assignTicket(ticketId, selectedAssignee === '' ? null : selectedAssignee)
+      setAssignmentSuccess('Ticket assignment updated successfully.')
       await loadTicket()
     } catch (requestError) {
       setAssignmentError(requestError.message)
@@ -109,6 +173,14 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
   if (!ticket) {
     return <p className="form-error" role="alert">Ticket not found.</p>
   }
+
+  const assignedUserFromList = assignableUsers.find((user) => user.id === ticket.assigned_to)
+  const assignedToDisplay = assignedUserFromList
+    ? `${assignedUserFromList.name} (${assignedUserFromList.role})`
+    : ticket.assigned_to === currentUser?.id
+      ? `${currentUser.name} (You)`
+      : ticket.assigned_to
+  const currentAssigneeIsListed = assignableUsers.some((user) => user.id === ticket.assigned_to)
 
   return (
     <div className="ticket-detail">
@@ -138,7 +210,7 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
           {ticket.assigned_to && (
             <div>
               <dt>Assigned To</dt>
-              <dd>{ticket.assigned_to === currentUser?.id ? `${currentUser.name} (You)` : ticket.assigned_to}</dd>
+              <dd>{assignedToDisplay}</dd>
             </div>
           )}
           {!ticket.assigned_to && <div><dt>Assigned To</dt><dd>Unassigned</dd></div>}
@@ -148,6 +220,44 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
             <button type="button" onClick={handleAssignToMe} disabled={assigning}>
               {assigning ? 'Assigning...' : 'Assign to me'}
             </button>
+            {assignmentSuccess && <p className="form-success" role="status">{assignmentSuccess}</p>}
+            {assignmentError && <p className="form-error" role="alert">{assignmentError}</p>}
+          </div>
+        )}
+        {canManageAssignment && (
+          <div className="assignment-controls">
+            {assignableUsersError && (
+              <p className="form-error" role="alert">{assignableUsersError}</p>
+            )}
+            {!assignableUsersError && (
+              <>
+                <select
+                  aria-label="Assignee"
+                  value={selectedAssignee}
+                  onChange={(event) => setSelectedAssignee(event.target.value)}
+                  disabled={assigning || assignableUsersLoading}
+                >
+                  <option value="">Unassigned</option>
+                  {ticket.assigned_to && !currentAssigneeIsListed && (
+                    <option value={ticket.assigned_to} disabled>
+                      Current assignee (not currently assignable)
+                    </option>
+                  )}
+                  {assignableUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name} — {user.role}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleUpdateAssignment}
+                  disabled={assigning || assignableUsersLoading}
+                >
+                  {assigning ? 'Updating assignment...' : 'Update assignment'}
+                </button>
+              </>
+            )}
             {assignmentSuccess && <p className="form-success" role="status">{assignmentSuccess}</p>}
             {assignmentError && <p className="form-error" role="alert">{assignmentError}</p>}
           </div>

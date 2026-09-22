@@ -130,3 +130,8 @@ export async function assignTicket(ticketId, assignedTo) {
   })
   return payload.data
 }
+
+export async function getAssignableUsers() {
+  const payload = await apiRequest('/api/users/assignable')
+  return payload.data.users
+}
