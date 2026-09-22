@@ -123,12 +123,33 @@ export async function getTicket(ticketId) {
   return payload.data
 }
 
+export async function updateTicketStatus(ticketId, status) {
+  const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}/status`, {
+    method: 'PATCH',
+    body: { status },
+  })
+  return payload.data
+}
+
 export async function assignTicket(ticketId, assignedTo) {
   const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}/assignment`, {
     method: 'PATCH',
     body: { assigned_to: assignedTo },
   })
   return payload.data
+}
+
+export async function getTicketComments(ticketId) {
+  const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}/comments`)
+  return payload.data.comments
+}
+
+export async function createTicketComment(ticketId, comment) {
+  const payload = await apiRequest(`/api/tickets/${encodeURIComponent(ticketId)}/comments`, {
+    method: 'POST',
+    body: { comment },
+  })
+  return payload.data.comment
 }
 
 export async function getAssignableUsers() {

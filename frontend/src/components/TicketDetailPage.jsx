@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { assignTicket, getAssignableUsers, getTicket } from '../api'
+import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, updateTicketStatus } from '../api'
 
 function formatDate(value) {
   if (!value) {
@@ -9,6 +9,39 @@ function formatDate(value) {
 
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+// Mirrors the backend's ALLOWED_STATUS_TRANSITIONS graph; Flask remains authoritative regardless of what is shown here.
+function getStatusActions(ticket, currentUser) {
+  if (!ticket || !currentUser) {
+    return []
+  }
+
+  const isAssignedEngineer = currentUser.role === 'support_engineer' && ticket.assigned_to === currentUser.id
+  const isManagerOrAdmin = currentUser.role === 'manager' || currentUser.role === 'admin'
+  const canTransitionNormally = isAssignedEngineer || isManagerOrAdmin
+
+  switch (ticket.status) {
+    case 'New':
+      return canTransitionNormally ? [{ label: 'Open Ticket', target: 'Open' }] : []
+    case 'Open':
+      return canTransitionNormally ? [{ label: 'Start Progress', target: 'In Progress' }] : []
+    case 'In Progress':
+      return canTransitionNormally ? [{ label: 'Resolve', target: 'Resolved' }] : []
+    case 'Resolved':
+      return canTransitionNormally
+        ? [
+            { label: 'Reopen', target: 'In Progress' },
+            { label: 'Close', target: 'Closed' },
+          ]
+        : []
+    case 'Closed':
+      return canTransitionNormally || currentUser.role === 'requester'
+        ? [{ label: 'Reopen', target: 'In Progress' }]
+        : []
+    default:
+      return []
+  }
 }
 
 function TicketDetailPage({ ticketId, currentUser, onBack }) {
@@ -23,6 +56,16 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
   const [assignableUsersLoading, setAssignableUsersLoading] = useState(false)
   const [assignableUsersError, setAssignableUsersError] = useState(null)
   const [selectedAssignee, setSelectedAssignee] = useState('')
+  const [statusUpdating, setStatusUpdating] = useState(false)
+  const [statusError, setStatusError] = useState(null)
+  const [statusSuccess, setStatusSuccess] = useState(null)
+  const [comments, setComments] = useState([])
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [commentsError, setCommentsError] = useState(null)
+  const [commentText, setCommentText] = useState('')
+  const [commentSubmitting, setCommentSubmitting] = useState(false)
+  const [commentSubmitError, setCommentSubmitError] = useState(null)
+  const [commentSubmitSuccess, setCommentSubmitSuccess] = useState(null)
 
   const canManageAssignment = currentUser?.role === 'manager' || currentUser?.role === 'admin'
 
@@ -121,6 +164,52 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
     setSelectedAssignee(ticket?.assigned_to || '')
   }, [ticket?.assigned_to])
 
+  async function loadComments() {
+    try {
+      const data = await getTicketComments(ticketId)
+      setComments(data)
+    } catch (requestError) {
+      setCommentsError(requestError.message)
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+
+    if (!ticketId) {
+      setComments([])
+      return () => {
+        active = false
+      }
+    }
+
+    async function loadInitialComments() {
+      setCommentsLoading(true)
+      setCommentsError(null)
+
+      try {
+        const data = await getTicketComments(ticketId)
+        if (active) {
+          setComments(data)
+        }
+      } catch (requestError) {
+        if (active) {
+          setCommentsError(requestError.message)
+        }
+      } finally {
+        if (active) {
+          setCommentsLoading(false)
+        }
+      }
+    }
+
+    loadInitialComments()
+
+    return () => {
+      active = false
+    }
+  }, [ticketId])
+
   async function handleAssignToMe() {
     setAssigning(true)
     setAssignmentError(null)
@@ -157,6 +246,49 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
     }
   }
 
+  async function handleStatusTransition(targetStatus) {
+    setStatusUpdating(true)
+    setStatusError(null)
+    setStatusSuccess(null)
+
+    try {
+      await updateTicketStatus(ticketId, targetStatus)
+      setStatusSuccess('Ticket status updated successfully.')
+      await loadTicket()
+    } catch (requestError) {
+      setStatusError(requestError.message)
+      // The server may have changed the ticket even though this request failed; reflect that state.
+      await loadTicket()
+    } finally {
+      setStatusUpdating(false)
+    }
+  }
+
+  async function handleSubmitComment(event) {
+    event.preventDefault()
+
+    const trimmedComment = commentText.trim()
+    if (!trimmedComment) {
+      setCommentSubmitError('Comment cannot be blank.')
+      return
+    }
+
+    setCommentSubmitting(true)
+    setCommentSubmitError(null)
+    setCommentSubmitSuccess(null)
+
+    try {
+      await createTicketComment(ticketId, trimmedComment)
+      setCommentText('')
+      setCommentSubmitSuccess('Comment posted successfully.')
+      await loadComments()
+    } catch (requestError) {
+      setCommentSubmitError(requestError.message)
+    } finally {
+      setCommentSubmitting(false)
+    }
+  }
+
   if (loading) {
     return <p>Loading ticket...</p>
   }
@@ -181,6 +313,7 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
       ? `${currentUser.name} (You)`
       : ticket.assigned_to
   const currentAssigneeIsListed = assignableUsers.some((user) => user.id === ticket.assigned_to)
+  const statusActions = getStatusActions(ticket, currentUser)
 
   return (
     <div className="ticket-detail">
@@ -195,6 +328,26 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
           <div><dt>Status</dt><dd>{ticket.status}</dd></div>
           <div><dt>Priority</dt><dd>{ticket.priority}</dd></div>
         </dl>
+        {statusActions.length > 0 && (
+          <div className="status-actions">
+            {statusActions.map((action) => (
+              <button
+                key={action.target}
+                type="button"
+                onClick={() => handleStatusTransition(action.target)}
+                disabled={statusUpdating}
+              >
+                {statusUpdating ? 'Updating status...' : action.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {(statusSuccess || statusError) && (
+          <div className="status-actions">
+            {statusSuccess && <p className="form-success" role="status">{statusSuccess}</p>}
+            {statusError && <p className="form-error" role="alert">{statusError}</p>}
+          </div>
+        )}
       </section>
 
       <section className="ticket-detail-section">
@@ -312,6 +465,39 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
             ))}
           </ol>
         )}
+      </section>
+
+      <section className="ticket-detail-section">
+        <h2>Comments</h2>
+        {commentsError && <p className="form-error" role="alert">{commentsError}</p>}
+        {!commentsError && commentsLoading && <p>Loading comments...</p>}
+        {!commentsError && !commentsLoading && comments.length === 0 && <p>No comments yet.</p>}
+        {!commentsError && !commentsLoading && comments.length > 0 && (
+          <ol className="ticket-comments">
+            {comments.map((comment) => (
+              <li key={comment.id}>
+                <strong>{comment.author_name || comment.author_email || 'Unknown'}</strong>
+                <p className="ticket-description">{comment.comment}</p>
+                <span>{formatDate(comment.created_at)}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+
+        <form className="comment-form" onSubmit={handleSubmitComment}>
+          <textarea
+            aria-label="New comment"
+            value={commentText}
+            onChange={(event) => setCommentText(event.target.value)}
+            disabled={commentSubmitting}
+            rows={3}
+          />
+          <button type="submit" disabled={commentSubmitting}>
+            {commentSubmitting ? 'Posting...' : 'Submit'}
+          </button>
+          {commentSubmitSuccess && <p className="form-success" role="status">{commentSubmitSuccess}</p>}
+          {commentSubmitError && <p className="form-error" role="alert">{commentSubmitError}</p>}
+        </form>
       </section>
     </div>
   )
