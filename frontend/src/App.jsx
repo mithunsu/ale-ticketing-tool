@@ -10,6 +10,8 @@ import TicketDetailPage from './components/TicketDetailPage'
 import LoginPage from './components/LoginPage'
 import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
+import AdminUsersPage from './components/AdminUsersPage'
+import AdminCreateUserPage from './components/AdminCreateUserPage'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)
@@ -64,6 +66,11 @@ function App() {
     setAuthError('Password changed successfully. Please sign in again.')
   }
 
+  function handleAuthenticationExpired() {
+    setCurrentUser(null)
+    setAuthError('Your session has expired. Please sign in again.')
+  }
+
   if (authLoading) {
     return <div className="container">Checking session...</div>
   }
@@ -91,6 +98,24 @@ function App() {
           <Route path="/tickets" element={<TicketListPage />} />
           <Route path="/tickets/:id" element={<TicketDetailPage currentUser={currentUser} />} />
           <Route path="/create" element={<CreateTicketPage />} />
+          <Route
+            path="/admin/users/new"
+            element={
+              <AdminCreateUserPage
+                currentUser={currentUser}
+                onAuthenticationExpired={handleAuthenticationExpired}
+              />
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <AdminUsersPage
+                currentUser={currentUser}
+                onAuthenticationExpired={handleAuthenticationExpired}
+              />
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

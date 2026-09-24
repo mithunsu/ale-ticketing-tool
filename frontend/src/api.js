@@ -157,3 +157,39 @@ export async function getAssignableUsers() {
   const payload = await apiRequest('/api/users/assignable')
   return payload.data.users
 }
+
+export async function getAdminUsers() {
+  const payload = await apiRequest('/api/admin/users')
+  return payload.data.users
+}
+
+export async function createAdminUser(userData) {
+  const payload = await apiRequest('/api/admin/users', {
+    method: 'POST',
+    body: userData,
+  })
+  return payload.data
+}
+
+export async function updateAdminUserRole(userId, role) {
+  const payload = await apiRequest(`/api/admin/users/${encodeURIComponent(userId)}/role`, {
+    method: 'PATCH',
+    body: { role },
+  })
+  return payload.data.user
+}
+
+export async function updateAdminUserStatus(userId, status) {
+  const payload = await apiRequest(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
+    method: 'PATCH',
+    body: { status },
+  })
+  return payload.data.user
+}
+
+export async function resetAdminUserPassword(userId) {
+  const payload = await apiRequest(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+    method: 'POST',
+  })
+  return payload.data
+}
