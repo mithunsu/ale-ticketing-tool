@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 
 import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, updateTicketStatus } from '../api'
 
@@ -59,7 +60,11 @@ function getStatusActions(ticket, currentUser) {
   }
 }
 
-function TicketDetailPage({ ticketId, currentUser, onBack }) {
+function TicketDetailPage({ currentUser }) {
+  const { id: ticketId } = useParams()
+  const navigate = useNavigate()
+  const onBack = () => navigate('/tickets')
+
   const [ticket, setTicket] = useState(null)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(Boolean(ticketId))
