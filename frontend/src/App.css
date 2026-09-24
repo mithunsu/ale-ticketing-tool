@@ -535,6 +535,12 @@ p {
   gap: 0.5rem;
 }
 
+.dashboard-ticket-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .dashboard-ticket-row {
   display: grid;
   grid-template-columns: 80px 1fr 100px auto;
@@ -601,6 +607,21 @@ p {
 .ticket-list-page {
   display: grid;
   gap: 1.5rem;
+}
+
+.ticket-list-navigation-link {
+  justify-self: start;
+  padding: 0.5rem 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  color: #3730a3;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ticket-list-navigation-link:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
 }
 
 .ticket-pagination {

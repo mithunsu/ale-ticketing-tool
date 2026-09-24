@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { getTickets } from '../api'
 
 const PAGE_LIMIT = 10
@@ -47,6 +47,7 @@ function TicketListPage() {
   const statusFilter = searchParams.get('status') || ''
   const priorityFilter = searchParams.get('priority') || ''
   const assignedToFilter = searchParams.get('assigned_to') || ''
+  const showingClosedTickets = statusFilter === 'Closed'
 
   useEffect(() => {
     let active = true
@@ -125,7 +126,16 @@ function TicketListPage() {
 
   if (tickets.length === 0) {
     const filterDesc = statusFilter ? ` with status "${statusFilter}"` : priorityFilter ? ` with priority "${priorityFilter}"` : ''
-    return <p>No tickets found{filterDesc}.</p>
+    return (
+      <div className="ticket-list-page">
+        {showingClosedTickets && (
+          <Link to="/tickets" className="ticket-list-navigation-link">
+            Active Tickets
+          </Link>
+        )}
+        <p>No tickets found{filterDesc}.</p>
+      </div>
+    )
   }
 
   const pageInfo = pagination ? `${(page - 1) * PAGE_LIMIT + 1} – ${Math.min(page * PAGE_LIMIT, pagination.total)}` : '—'
@@ -133,6 +143,11 @@ function TicketListPage() {
 
   return (
     <div className="ticket-list-page">
+      {showingClosedTickets && (
+        <Link to="/tickets" className="ticket-list-navigation-link">
+          Active Tickets
+        </Link>
+      )}
       <table className="ticket-table">
         <thead>
           <tr>

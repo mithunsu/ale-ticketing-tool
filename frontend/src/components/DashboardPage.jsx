@@ -255,17 +255,20 @@ function DashboardPage() {
         ) : needsAttention.length === 0 ? (
           <p>No tickets need your attention.</p>
         ) : (
-          <>
-            <div className="dashboard-ticket-list">
-              {needsAttention.map((ticket) => (
-                <TicketSummaryRow key={ticket.id} ticket={ticket} />
-              ))}
-            </div>
-            <Link to="/tickets" className="dashboard-view-all-link">
-              View all tickets
-            </Link>
-          </>
+          <div className="dashboard-ticket-list">
+            {needsAttention.map((ticket) => (
+              <TicketSummaryRow key={ticket.id} ticket={ticket} />
+            ))}
+          </div>
         )}
+        <div className="dashboard-ticket-actions">
+          <Link to="/tickets" className="dashboard-view-all-link">
+            View all tickets
+          </Link>
+          <Link to="/tickets?status=Closed" className="dashboard-view-all-link">
+            Closed Tickets
+          </Link>
+        </div>
       </section>
 
       <section className="dashboard-section">
