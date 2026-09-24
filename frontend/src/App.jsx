@@ -1,22 +1,20 @@
 import { useEffect, useState } from 'react'
+import { Routes, Route, Navigate } from 'react-router-dom'
 
 import { getCurrentUser, logout } from './api'
 import './App.css'
-import ActiveTicketsPage from './components/ActiveTicketsPage'
-import ClosedTicketsPage from './components/ClosedTicketsPage'
+import DashboardPage from './components/DashboardPage'
+import TicketListPage from './components/TicketListPage'
 import CreateTicketPage from './components/CreateTicketPage'
+import TicketDetailPage from './components/TicketDetailPage'
 import LoginPage from './components/LoginPage'
 import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
-import TicketDetailPage from './components/TicketDetailPage'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState(null)
-  const [currentView, setCurrentView] = useState('active-tickets')
-  const [selectedTicketId, setSelectedTicketId] = useState(null)
-  const [ticketDetailReturnView, setTicketDetailReturnView] = useState('active-tickets')
 
   function handleLoginSuccess(user) {
     setAuthError(null)
@@ -56,7 +54,6 @@ function App() {
     try {
       await logout()
       setCurrentUser(null)
-      setCurrentView('active-tickets')
     } catch (error) {
       setAuthError(error.message)
     }
@@ -65,20 +62,6 @@ function App() {
   function handlePasswordChangeSuccess() {
     setCurrentUser(null)
     setAuthError('Password changed successfully. Please sign in again.')
-  }
-
-  function handleSelectTicket(ticketId) {
-    if (currentView === 'active-tickets' || currentView === 'closed-tickets') {
-      setTicketDetailReturnView(currentView)
-    }
-    setSelectedTicketId(ticketId)
-    setCurrentView('ticket-detail')
-  }
-
-  function handleBackFromTicketDetail() {
-    setCurrentView(
-      ticketDetailReturnView === 'closed-tickets' ? 'closed-tickets' : 'active-tickets',
-    )
   }
 
   if (authLoading) {
@@ -98,38 +81,18 @@ function App() {
     return <PasswordChangePage onPasswordChangeSuccess={handlePasswordChangeSuccess} />
   }
 
-  const viewLabels = {
-    'active-tickets': 'Active Tickets',
-    'create-ticket': 'Create Ticket',
-    'closed-tickets': 'Closed Tickets',
-    'ticket-detail': 'Ticket Detail',
-  }
-
   return (
     <div className="app-shell">
-      <Navigation
-        currentUser={currentUser}
-        currentView={currentView}
-        onNavigate={setCurrentView}
-        onLogout={handleLogout}
-      />
+      <Navigation currentUser={currentUser} onLogout={handleLogout} />
       {authError && <p role="alert">{authError}</p>}
       <main className="app-content">
-        <h1>{viewLabels[currentView]}</h1>
-        {currentView === 'active-tickets' && (
-          <ActiveTicketsPage onSelectTicket={handleSelectTicket} />
-        )}
-        {currentView === 'closed-tickets' && (
-          <ClosedTicketsPage onSelectTicket={handleSelectTicket} />
-        )}
-        {currentView === 'create-ticket' && <CreateTicketPage />}
-        {currentView === 'ticket-detail' && (
-          <TicketDetailPage
-            ticketId={selectedTicketId}
-            currentUser={currentUser}
-            onBack={handleBackFromTicketDetail}
-          />
-        )}
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/tickets" element={<TicketListPage />} />
+          <Route path="/tickets/:id" element={<TicketDetailPage currentUser={currentUser} />} />
+          <Route path="/create" element={<CreateTicketPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </main>
     </div>
   )

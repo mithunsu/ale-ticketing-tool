@@ -1,10 +1,22 @@
+import { Link, useLocation } from 'react-router-dom'
+
 const navigationItems = [
-  { id: 'active-tickets', label: 'Active Tickets' },
-  { id: 'create-ticket', label: 'Create Ticket' },
-  { id: 'closed-tickets', label: 'Closed Tickets' },
+  { path: '/', label: 'Dashboard' },
+  { path: '/tickets', label: 'Tickets' },
+  { path: '/create', label: 'Create Ticket' },
 ]
 
-function Navigation({ currentUser, currentView, onNavigate, onLogout }) {
+// Exact match for "/" so Dashboard isn't active on every route; prefix match for nested routes (e.g. /tickets/:id).
+function isItemActive(pathname, itemPath) {
+  if (itemPath === '/') {
+    return pathname === '/'
+  }
+  return pathname === itemPath || pathname.startsWith(`${itemPath}/`)
+}
+
+function Navigation({ currentUser, onLogout }) {
+  const location = useLocation()
+
   return (
     <header className="app-header">
       <div>
@@ -14,17 +26,19 @@ function Navigation({ currentUser, currentView, onNavigate, onLogout }) {
         </p>
       </div>
       <nav className="app-navigation" aria-label="Ticket views">
-        {navigationItems.map((item) => (
-          <button
-            className={currentView === item.id ? 'navigation-button active' : 'navigation-button'}
-            key={item.id}
-            type="button"
-            onClick={() => onNavigate(item.id)}
-            aria-current={currentView === item.id ? 'page' : undefined}
-          >
-            {item.label}
-          </button>
-        ))}
+        {navigationItems.map((item) => {
+          const active = isItemActive(location.pathname, item.path)
+          return (
+            <Link
+              className={active ? 'navigation-button active' : 'navigation-button'}
+              key={item.path}
+              to={item.path}
+              aria-current={active ? 'page' : undefined}
+            >
+              {item.label}
+            </Link>
+          )
+        })}
         <button className="navigation-button logout-button" type="button" onClick={onLogout}>
           Logout
         </button>

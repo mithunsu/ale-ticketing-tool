@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { createTicket } from '../api'
 
@@ -8,6 +9,7 @@ const SETUP_FIELDS = [
   { name: 'server_ip', label: 'Server IP', required: true },
   { name: 'platform', label: 'Platform', required: true },
   { name: 'dut', label: 'DUT', required: true },
+  { name: 'aos_image_build', label: 'AOS Image Build', required: true },
   { name: 'pal_server', label: 'PAL Server' },
   { name: 'emp', label: 'EMP' },
   { name: 'console', label: 'Console' },
@@ -30,6 +32,7 @@ const INITIAL_FORM = {
 }
 
 function CreateTicketPage() {
+  const navigate = useNavigate()
   const [form, setForm] = useState(INITIAL_FORM)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState(null)
@@ -93,7 +96,9 @@ function CreateTicketPage() {
     }
 
     const setupSnapshot = Object.fromEntries(
-      Object.entries(form.setup_snapshot).filter(([, value]) => value.trim() !== ''),
+      Object.entries(form.setup_snapshot)
+        .map(([name, value]) => [name, value.trim()])
+        .filter(([, value]) => value !== ''),
     )
 
     setSubmitting(true)
@@ -106,6 +111,12 @@ function CreateTicketPage() {
       })
       setSuccessMessage('Ticket created successfully.')
       setCreatedTicket(data.ticket)
+      // Navigate to the newly created ticket after a brief delay to show the success message
+      setTimeout(() => {
+        if (data.ticket?.id) {
+          navigate(`/tickets/${data.ticket.id}`)
+        }
+      }, 1000)
     } catch (error) {
       setSubmitError(formatSubmitError(error))
     } finally {

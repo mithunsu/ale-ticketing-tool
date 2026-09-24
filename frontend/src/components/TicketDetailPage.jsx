@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 
 import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, updateTicketStatus } from '../api'
+
+const SETUP_FIELD_LABELS = {
+  aos_image_build: 'AOS Image Build',
+}
 
 function formatDate(value) {
   if (!value) {
@@ -57,7 +62,9 @@ function getStatusActions(ticket, currentUser) {
   }
 }
 
-function TicketDetailPage({ ticketId, currentUser, onBack }) {
+function TicketDetailPage({ currentUser }) {
+  const { id: ticketId } = useParams()
+  const navigate = useNavigate()
   const [ticket, setTicket] = useState(null)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(Boolean(ticketId))
@@ -356,7 +363,7 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
     return (
       <div className="ticket-detail-state">
         <p className="form-error" role="alert">{error}</p>
-        <button type="button" onClick={onBack}>Back</button>
+        <button type="button" onClick={() => navigate(-1)}>Back</button>
       </div>
     )
   }
@@ -376,7 +383,7 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
 
   return (
     <div className="ticket-detail">
-      <button type="button" className="back-button" onClick={onBack}>Back</button>
+      <button type="button" className="back-button" onClick={() => navigate(-1)}>Back</button>
 
       <section className="ticket-detail-section ticket-summary">
         <div>
@@ -512,8 +519,8 @@ function TicketDetailPage({ ticketId, currentUser, onBack }) {
           <dl className="setup-snapshot">
             {Object.entries(ticket.setup_snapshot).map(([key, value]) => (
               <div key={key}>
-                <dt>{key}</dt>
-                <dd>{value === null || value === '' ? 'Not provided' : String(value)}</dd>
+                <dt>{SETUP_FIELD_LABELS[key] || key}</dt>
+                <dd>{value == null || value === '' ? 'Not provided' : String(value)}</dd>
               </div>
             ))}
           </dl>

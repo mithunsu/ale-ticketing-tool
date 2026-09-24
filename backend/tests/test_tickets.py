@@ -87,7 +87,13 @@ def _app_with_current_user(monkeypatch, role="requester", cursor=None):
         "New",
         "user-1",
         None,
-        {"server_name": "lab-1", "server_ip": "10.0.0.1", "platform": "ALE", "dut": "router"},
+        {
+            "server_name": "lab-1",
+            "server_ip": "10.0.0.1",
+            "platform": "ALE",
+            "dut": "router",
+            "aos_image_build": "8.11.2.R01.1234",
+        },
         datetime(2026, 9, 10, tzinfo=timezone.utc),
         datetime(2026, 9, 10, tzinfo=timezone.utc),
     )
@@ -122,6 +128,7 @@ def _valid_payload(**overrides):
             "server_ip": " 10.0.0.1 ",
             "platform": " ALE ",
             "dut": " router ",
+            "aos_image_build": " 8.11.2.R01.1234 ",
         },
     }
     payload.update(overrides)
@@ -142,6 +149,7 @@ def test_active_roles_create_tickets_with_history(monkeypatch, role):
     assert ticket["status"] == "New"
     assert ticket["assigned_to"] is None
     assert ticket["priority"] == "High"
+    assert ticket["setup_snapshot"]["aos_image_build"] == "8.11.2.R01.1234"
     assert connection.committed is True
     assert len(cursor.executed) == 2
     ticket_query, ticket_params = cursor.executed[0]
@@ -212,6 +220,27 @@ def test_required_top_level_fields_are_enforced(monkeypatch, payload_modifier, e
 
     assert response.status_code == 400
     assert expected_field in response.get_json()["error"]["details"]
+    assert cursor.executed == []
+
+
+@pytest.mark.parametrize(
+    "setup_snapshot_modifier",
+    [
+        lambda setup_snapshot: setup_snapshot.pop("aos_image_build"),
+        lambda setup_snapshot: setup_snapshot.update({"aos_image_build": "   "}),
+    ],
+)
+def test_aos_image_build_is_required(monkeypatch, setup_snapshot_modifier):
+    app, cursor, _connection = _app_with_current_user(monkeypatch)
+    payload = _valid_payload()
+    setup_snapshot_modifier(payload["setup_snapshot"])
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.post("/api/tickets", json=payload, headers=csrf_headers(client))
+
+    assert response.status_code == 400
+    assert "aos_image_build" in response.get_json()["error"]["details"]["setup_snapshot"]
     assert cursor.executed == []
 
 
@@ -324,6 +353,7 @@ def _sample_ticket_list_row(
     requester_email="alice@example.com",
     assigned_to=None,
     assignee_name=None,
+    priority="high",
     created_at=None,
 ):
     ts = created_at or datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)
@@ -332,7 +362,7 @@ def _sample_ticket_list_row(
         ticket_number,
         title,
         "Detailed problem description",
-        "high",
+        priority,
         "New",
         requester_id,
         requester_name,
@@ -1103,6 +1133,227 @@ def test_status_not_still_works_with_assignee_join(monkeypatch):
     assert "LEFT JOIN users assignee ON t.assigned_to = assignee.id" in data_query
     assert "t.status <> %s" in data_query
     assert data_params == ("Closed", 10, 0)
+
+
+def test_priority_filter_is_accepted(monkeypatch):
+    row = _sample_ticket_list_row(priority="critical")
+    cursor = _StubCursor(tickets=[row], count=1)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?priority=Critical")
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["pagination"]["total"] == 1
+
+
+def test_priority_filter_added_to_count_and_select_queries(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?priority=High")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert "priority = %s" in count_query
+    assert "t.priority = %s" in data_query
+    # Priority is converted to lowercase database value
+    assert count_params == ("high",)
+    assert data_params == ("high", 10, 0)
+
+
+def test_invalid_priority_returns_400(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?priority=InvalidPriority")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "priority" in response.get_json()["error"]["details"]
+
+
+def test_assigned_to_me_filter_is_accepted(monkeypatch):
+    row = _sample_ticket_list_row(assigned_to="user-1")
+    cursor = _StubCursor(tickets=[row], count=1)
+    user_id = "user-1"
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+    
+    # Mock g.current_user in the request context
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?assigned_to=me")
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["pagination"]["total"] == 1
+
+
+def test_assigned_to_me_added_to_count_and_select_queries(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?assigned_to=me")
+
+    assert response.status_code == 200
+    count_query, count_params = cursor.executed[0]
+    data_query, data_params = cursor.executed[1]
+    assert "assigned_to = %s" in count_query
+    assert "t.assigned_to = %s" in data_query
+    # assigned_to=me resolves to current user id on backend
+    assert count_params == ("user-1",)
+    assert data_params == ("user-1", 10, 0)
+
+
+def test_invalid_assigned_to_returns_400(monkeypatch):
+    cursor = _StubCursor(tickets=[], count=0)
+    app, cursor, _connection = _app_with_current_user(monkeypatch, role="admin", cursor=cursor)
+
+    with app.test_client() as client:
+        _authenticate(client)
+        response = client.get("/api/tickets?assigned_to=invalid")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "assigned_to" in response.get_json()["error"]["details"]
+
+
+def _create_priority_ticket(db_config, requester_id, priority="medium", status="New", assigned_to=None):
+    with psycopg.connect(**db_config, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO tickets (
+                    title, description, setup_snapshot, priority, requester_id, status, assigned_to
+                )
+                VALUES (
+                    'Priority filter test ticket',
+                    'Detailed description of the issue.',
+                    %s::jsonb,
+                    %s, %s, %s, %s
+                )
+                RETURNING id;
+                """,
+                (
+                    Jsonb({"server_name": "lab-1", "server_ip": "10.0.0.1", "platform": "ALE", "dut": "router"}),
+                    priority,
+                    requester_id,
+                    status,
+                    assigned_to,
+                ),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            return str(row[0])
+
+
+def test_priority_critical_excludes_medium_ticket_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    critical_id = _create_priority_ticket(test_db["config"], test_db["user_id"], priority="critical")
+    _create_priority_ticket(test_db["config"], test_db["user_id"], priority="medium")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = test_db["user_id"]
+        response = client.get("/api/tickets?priority=Critical")
+
+    assert response.status_code == 200
+    payload = response.get_json()["data"]
+    assert payload["pagination"]["total"] == 1
+    returned_ids = [ticket["id"] for ticket in payload["tickets"]]
+    assert returned_ids == [critical_id]
+    assert all(ticket["priority"] == "Critical" for ticket in payload["tickets"])
+
+
+def test_priority_medium_returns_only_medium_tickets_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    medium_id = _create_priority_ticket(test_db["config"], test_db["user_id"], priority="medium")
+    _create_priority_ticket(test_db["config"], test_db["user_id"], priority="critical")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = test_db["user_id"]
+        response = client.get("/api/tickets?priority=Medium")
+
+    assert response.status_code == 200
+    payload = response.get_json()["data"]
+    assert payload["pagination"]["total"] == 1
+    returned_ids = [ticket["id"] for ticket in payload["tickets"]]
+    assert returned_ids == [medium_id]
+    assert all(ticket["priority"] == "Medium" for ticket in payload["tickets"])
+
+
+def test_priority_filter_combines_with_requester_rbac_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    own_critical_id = _create_priority_ticket(test_db["config"], test_db["user_id"], priority="critical")
+
+    other_requester_id = _create_status_user(
+        test_db["config"], "requester", "Other Requester", "other.requester@example.com"
+    )
+    _create_priority_ticket(test_db["config"], other_requester_id, priority="critical")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = test_db["user_id"]
+        response = client.get("/api/tickets?priority=Critical")
+
+    assert response.status_code == 200
+    payload = response.get_json()["data"]
+    # Requester RBAC still limits results to their own ticket despite both tickets matching priority.
+    assert payload["pagination"]["total"] == 1
+    returned_ids = [ticket["id"] for ticket in payload["tickets"]]
+    assert returned_ids == [own_critical_id]
+
+
+def test_priority_filter_combines_with_status_filter_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    matching_id = _create_priority_ticket(test_db["config"], test_db["user_id"], priority="critical", status="Open")
+    _create_priority_ticket(test_db["config"], test_db["user_id"], priority="critical", status="New")
+    _create_priority_ticket(test_db["config"], test_db["user_id"], priority="medium", status="Open")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = test_db["user_id"]
+        response = client.get("/api/tickets?priority=Critical&status=Open")
+
+    assert response.status_code == 200
+    payload = response.get_json()["data"]
+    assert payload["pagination"]["total"] == 1
+    returned_ids = [ticket["id"] for ticket in payload["tickets"]]
+    assert returned_ids == [matching_id]
+
+
+def test_priority_filter_pagination_total_reflects_filtered_set_in_real_postgres(postgres_disposable_db):
+    test_db = postgres_disposable_db
+    for _ in range(3):
+        _create_priority_ticket(test_db["config"], test_db["user_id"], priority="critical")
+    for _ in range(2):
+        _create_priority_ticket(test_db["config"], test_db["user_id"], priority="medium")
+
+    app = create_app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user_id"] = test_db["user_id"]
+        response = client.get("/api/tickets?priority=Critical&limit=2")
+
+    assert response.status_code == 200
+    payload = response.get_json()["data"]
+    # Total reflects the full filtered set, not just the returned page.
+    assert payload["pagination"]["total"] == 3
+    assert payload["pagination"]["total_pages"] == 2
+    assert len(payload["tickets"]) == 2
+    assert all(ticket["priority"] == "Critical" for ticket in payload["tickets"])
 
 
 def test_count_query_unaffected_by_assignee_join(monkeypatch):

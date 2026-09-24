@@ -29,6 +29,7 @@ SETUP_SNAPSHOT_SCHEMA = {
     "server_ip": {"required": True, "type": str, "max_length": 255},
     "platform": {"required": True, "type": str, "max_length": 255},
     "dut": {"required": True, "type": str, "max_length": 255},
+    "aos_image_build": {"required": True, "type": str, "max_length": 255},
     "pal_server": {"type": str, "max_length": 255},
     "emp": {"type": str, "max_length": 255},
     "console": {"type": str, "max_length": 255},
@@ -232,6 +233,22 @@ def list_tickets():
     if raw_status is not None and raw_status_not is not None:
         errors["status"] = "Cannot be combined with status_not."
 
+    raw_priority = request.args.get("priority")
+    priority = None
+    if raw_priority is not None:
+        if raw_priority not in PRIORITY_VALUES:
+            errors["priority"] = f"Must be one of: {', '.join(PRIORITY_VALUES)}."
+        else:
+            priority = PRIORITY_TO_DATABASE_VALUE[raw_priority]
+
+    raw_assigned_to = request.args.get("assigned_to")
+    assigned_to = None
+    if raw_assigned_to is not None:
+        if raw_assigned_to == "me":
+            assigned_to = "me"
+        else:
+            errors["assigned_to"] = "Must be 'me' or omitted."
+
     if errors:
         return validation_error_response(details=errors)
 
@@ -261,54 +278,56 @@ def list_tickets():
         LEFT JOIN users assignee ON t.assigned_to = assignee.id
     """
 
+    # Build WHERE conditions dynamically.
+    # Two condition lists are kept because the count query selects from
+    # "tickets" (no alias) while the data query selects from "tickets t".
+    data_conditions = []
+    count_conditions = []
+    where_params = []
+
     if current_user_role == "requester":
-        if status_not is not None:
-            count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s AND status <> %s;"
-            count_params = (str(g.current_user["id"]), status_not)
-            query = (
-                base_query
-                + "\n        WHERE t.requester_id = %s AND t.status <> %s"
-                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-            )
-            params = (str(g.current_user["id"]), status_not, limit, offset)
-        elif status is not None:
-            count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s AND status = %s;"
-            count_params = (str(g.current_user["id"]), status)
-            query = (
-                base_query
-                + "\n        WHERE t.requester_id = %s AND t.status = %s"
-                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-            )
-            params = (str(g.current_user["id"]), status, limit, offset)
-        else:
-            count_query = "SELECT COUNT(*) FROM tickets WHERE requester_id = %s;"
-            count_params = (str(g.current_user["id"]),)
-            query = base_query + "\n        WHERE t.requester_id = %s\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-            params = (str(g.current_user["id"]), limit, offset)
+        data_conditions.append("t.requester_id = %s")
+        count_conditions.append("requester_id = %s")
+        where_params.append(str(g.current_user["id"]))
+
+    if status_not is not None:
+        data_conditions.append("t.status <> %s")
+        count_conditions.append("status <> %s")
+        where_params.append(status_not)
+    elif status is not None:
+        data_conditions.append("t.status = %s")
+        count_conditions.append("status = %s")
+        where_params.append(status)
+
+    if priority is not None:
+        data_conditions.append("t.priority = %s")
+        count_conditions.append("priority = %s")
+        where_params.append(priority)
+
+    if assigned_to == "me":
+        data_conditions.append("t.assigned_to = %s")
+        count_conditions.append("assigned_to = %s")
+        where_params.append(str(g.current_user["id"]))
+
+    # Build the WHERE clauses
+    if data_conditions:
+        where_clause = " WHERE " + " AND ".join(data_conditions)
+        count_where_clause = " WHERE " + " AND ".join(count_conditions)
     else:
-        if status_not is not None:
-            count_query = "SELECT COUNT(*) FROM tickets WHERE status <> %s;"
-            count_params = (status_not,)
-            query = (
-                base_query
-                + "\n        WHERE t.status <> %s"
-                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-            )
-            params = (status_not, limit, offset)
-        elif status is not None:
-            count_query = "SELECT COUNT(*) FROM tickets WHERE status = %s;"
-            count_params = (status,)
-            query = (
-                base_query
-                + "\n        WHERE t.status = %s"
-                + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-            )
-            params = (status, limit, offset)
-        else:
-            count_query = "SELECT COUNT(*) FROM tickets;"
-            count_params = None
-            query = base_query + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
-            params = (limit, offset)
+        where_clause = ""
+        count_where_clause = ""
+
+    # Build count query
+    count_query = "SELECT COUNT(*) FROM tickets" + count_where_clause + ";"
+    count_params = tuple(where_params) if where_params else None
+
+    # Build main query
+    query = (
+        base_query
+        + where_clause
+        + "\n        ORDER BY t.created_at DESC, t.id DESC\n        LIMIT %s OFFSET %s;"
+    )
+    params = tuple(where_params) + (limit, offset)
 
     try:
         with get_db_connection() as connection:
@@ -320,10 +339,7 @@ def list_tickets():
                 count_row = cursor.fetchone()
                 total = count_row[0] if count_row is not None else 0
 
-                if params is not None:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
+                cursor.execute(query, params)
                 rows = cursor.fetchall()
     except psycopg.Error:
         current_app.logger.error("Unable to list tickets.", exc_info=True)
