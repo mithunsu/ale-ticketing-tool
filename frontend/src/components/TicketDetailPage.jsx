@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
 
 import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, updateTicketStatus } from '../api'
-
-const SETUP_FIELD_LABELS = {
-  aos_image_build: 'AOS Image Build',
-}
 
 function formatDate(value) {
   if (!value) {
@@ -38,10 +33,12 @@ function getStatusActions(ticket, currentUser) {
   const isAssignedEngineer = currentUser.role === 'support_engineer' && ticket.assigned_to === currentUser.id
   const isManagerOrAdmin = currentUser.role === 'manager' || currentUser.role === 'admin'
   const canTransitionNormally = isAssignedEngineer || isManagerOrAdmin
+  const canStartNewTicket = ticket.assigned_to === currentUser.id
+    && (currentUser.role === 'support_engineer' || isManagerOrAdmin)
 
   switch (ticket.status) {
     case 'New':
-      return canTransitionNormally ? [{ label: 'Open Ticket', target: 'Open' }] : []
+      return canStartNewTicket ? [{ label: 'Open Ticket', target: 'In Progress' }] : []
     case 'Open':
       return canTransitionNormally ? [{ label: 'Start Progress', target: 'In Progress' }] : []
     case 'In Progress':
@@ -62,9 +59,7 @@ function getStatusActions(ticket, currentUser) {
   }
 }
 
-function TicketDetailPage({ currentUser }) {
-  const { id: ticketId } = useParams()
-  const navigate = useNavigate()
+function TicketDetailPage({ ticketId, currentUser, onBack }) {
   const [ticket, setTicket] = useState(null)
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(Boolean(ticketId))
@@ -363,7 +358,7 @@ function TicketDetailPage({ currentUser }) {
     return (
       <div className="ticket-detail-state">
         <p className="form-error" role="alert">{error}</p>
-        <button type="button" onClick={() => navigate(-1)}>Back</button>
+        <button type="button" onClick={onBack}>Back</button>
       </div>
     )
   }
@@ -383,7 +378,7 @@ function TicketDetailPage({ currentUser }) {
 
   return (
     <div className="ticket-detail">
-      <button type="button" className="back-button" onClick={() => navigate(-1)}>Back</button>
+      <button type="button" className="back-button" onClick={onBack}>Back</button>
 
       <section className="ticket-detail-section ticket-summary">
         <div>
@@ -519,8 +514,8 @@ function TicketDetailPage({ currentUser }) {
           <dl className="setup-snapshot">
             {Object.entries(ticket.setup_snapshot).map(([key, value]) => (
               <div key={key}>
-                <dt>{SETUP_FIELD_LABELS[key] || key}</dt>
-                <dd>{value == null || value === '' ? 'Not provided' : String(value)}</dd>
+                <dt>{key}</dt>
+                <dd>{value === null || value === '' ? 'Not provided' : String(value)}</dd>
               </div>
             ))}
           </dl>

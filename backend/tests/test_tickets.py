@@ -1619,6 +1619,7 @@ CURRENT_USER_ID = "d2f7b022-7772-4d2a-a92c-0e9e110d9f01"
 OTHER_USER_ID = "e3f7b022-7772-4d2a-a92c-0e9e110d9f01"
 STATUS_TRANSITIONS = {
     ("New", "Open"),
+    ("New", "In Progress"),
     ("Open", "In Progress"),
     ("In Progress", "Resolved"),
     ("Resolved", "In Progress"),
@@ -1765,7 +1766,7 @@ def test_invalid_status_request_body_is_rejected(monkeypatch, body):
     assert cursor.executed == []
 
 
-@pytest.mark.parametrize(("current_status", "target_status"), [("New", "Open"), ("Open", "In Progress"), ("In Progress", "Resolved"), ("Resolved", "In Progress")])
+@pytest.mark.parametrize(("current_status", "target_status"), [("New", "Open"), ("New", "In Progress"), ("Open", "In Progress"), ("In Progress", "Resolved"), ("Resolved", "In Progress")])
 def test_allowed_status_transitions_succeed(monkeypatch, current_status, target_status):
     current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
     updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
@@ -1801,9 +1802,10 @@ def test_allowed_status_transitions_succeed(monkeypatch, current_status, target_
     else:
         assert cursor.executed[1][1] == (target_status, TICKET_ID, current_status, CURRENT_USER_ID)
     assert "INSERT INTO ticket_history" in cursor.executed[2][0]
+    assert cursor.executed[2][1] == (TICKET_ID, CURRENT_USER_ID, current_status, target_status)
 
 
-@pytest.mark.parametrize(("current_status", "target_status"), [("New", "In Progress"), ("New", "Resolved"), ("Open", "Resolved"), ("Open", "New"), ("In Progress", "Open"), ("Resolved", "New"), ("Resolved", "Open")])
+@pytest.mark.parametrize(("current_status", "target_status"), [("New", "Resolved"), ("Open", "Resolved"), ("Open", "New"), ("In Progress", "Open"), ("Resolved", "New"), ("Resolved", "Open")])
 def test_invalid_status_transitions_are_rejected(monkeypatch, current_status, target_status):
     cursor = _StubCursor(fetchone_results=[_status_ticket(status=current_status, assigned_to=CURRENT_USER_ID)])
     app, cursor, connection = _app_with_assignment_user(monkeypatch, "support_engineer", cursor)
@@ -1878,6 +1880,53 @@ def test_privileged_roles_can_change_status(monkeypatch, role):
     assert response.get_json()["data"]["ticket"]["status"] == "Open"
     assert connection.committed is True
     assert "INSERT INTO ticket_history" in cursor.executed[-1][0]
+
+
+@pytest.mark.parametrize("role", ["support_engineer", "manager", "admin"])
+def test_assigned_support_roles_can_start_new_ticket(monkeypatch, role):
+    current_updated_at = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc)
+    cursor = _StubCursor(
+        fetchone_results=[
+            _status_ticket(status="New", assigned_to=CURRENT_USER_ID, updated_at=current_updated_at),
+            (TICKET_ID, "In Progress", CURRENT_USER_ID, updated_at, None),
+        ]
+    )
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, role, cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "In Progress"},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["ticket"]["status"] == "In Progress"
+    assert connection.committed is True
+    assert "AND assigned_to = %s" in cursor.executed[1][0]
+    assert cursor.executed[1][1] == ("In Progress", TICKET_ID, "New", CURRENT_USER_ID)
+    assert cursor.executed[2][1] == (TICKET_ID, CURRENT_USER_ID, "New", "In Progress")
+
+
+@pytest.mark.parametrize("role", ["support_engineer", "manager", "admin"])
+@pytest.mark.parametrize("assigned_to", [None, OTHER_USER_ID])
+def test_starting_new_ticket_requires_current_user_assignment(monkeypatch, role, assigned_to):
+    cursor = _StubCursor(fetchone_results=[_status_ticket(status="New", assigned_to=assigned_to)])
+    app, cursor, connection = _app_with_assignment_user(monkeypatch, role, cursor)
+
+    with app.test_client() as client:
+        _authenticate_assignment_user(client)
+        response = client.patch(
+            f"/api/tickets/{TICKET_ID}/status",
+            json={"status": "In Progress"},
+            headers=_assignment_headers(client),
+        )
+
+    assert response.status_code == 403
+    assert connection.committed is False
+    assert len(cursor.executed) == 1
 
 
 def test_support_engineer_cannot_change_unassigned_or_other_users_ticket(monkeypatch):
@@ -2284,7 +2333,7 @@ def test_status_history_insert_rollback_reverts_status_in_real_postgres(postgres
 
         response = client.patch(
             f"/api/tickets/{ticket_id}/status",
-            json={"status": "Open"},
+            json={"status": "In Progress"},
             headers=csrf_headers(client),
         )
 

@@ -16,6 +16,7 @@ ALLOWED_ROLES = ("requester", "support_engineer", "manager", "admin")
 VALID_TICKET_STATUS_VALUES = ("New", "Open", "In Progress", "Resolved", "Closed")
 ALLOWED_STATUS_TRANSITIONS = {
     ("New", "Open"),
+    ("New", "In Progress"),
     ("Open", "In Progress"),
     ("In Progress", "Resolved"),
     ("Resolved", "In Progress"),
@@ -811,6 +812,14 @@ def update_ticket_status(ticket_id):
                             status_code=403,
                         )
 
+                starting_new_ticket = current_status == "New" and target_status == "In Progress"
+                if starting_new_ticket and (assigned_to is None or str(assigned_to) != current_user_id):
+                    return error_response(
+                        code="FORBIDDEN",
+                        message="You do not have permission to perform this action.",
+                        status_code=403,
+                    )
+
                 # requester's only permitted transition is the manual Closed -> In Progress reopen
                 if current_user["role"] == "requester" and not (
                     current_status == "Closed" and target_status == "In Progress"
@@ -860,7 +869,7 @@ def update_ticket_status(ticket_id):
                     f"closed_at = {closed_at_assignment}, updated_at = CURRENT_TIMESTAMP "
                     "WHERE id = %s AND status = %s"
                 )
-                if current_user["role"] == "support_engineer":
+                if current_user["role"] == "support_engineer" or starting_new_ticket:
                     update_sql += " AND assigned_to = %s"
                     update_params = (target_status, *resolution_params, ticket_id, current_status, current_user_id)
                 else:
@@ -883,7 +892,7 @@ def update_ticket_status(ticket_id):
                             status_code=404,
                         )
 
-                    if current_user["role"] == "support_engineer" and str(current_ticket[2]) != current_user_id:
+                    if (current_user["role"] == "support_engineer" or starting_new_ticket) and str(current_ticket[2]) != current_user_id:
                         return error_response(
                             code="FORBIDDEN",
                             message="You do not have permission to perform this action.",
