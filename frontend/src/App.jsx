@@ -12,6 +12,7 @@ import Navigation from './components/Navigation'
 import PasswordChangePage from './components/PasswordChangePage'
 import AdminUsersPage from './components/AdminUsersPage'
 import AdminCreateUserPage from './components/AdminCreateUserPage'
+import AdminDashboardPage from './components/AdminDashboardPage'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)
@@ -98,6 +99,7 @@ function App() {
           <Route path="/tickets" element={<TicketListPage />} />
           <Route path="/tickets/:id" element={<TicketDetailPage currentUser={currentUser} />} />
           <Route path="/create" element={<CreateTicketPage />} />
+          <Route path="/admin" element={<AdminDashboardPage currentUser={currentUser} />} />
           <Route
             path="/admin/users/new"
             element={

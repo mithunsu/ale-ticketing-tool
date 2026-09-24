@@ -101,6 +101,15 @@ p {
   font-size: 0.9rem;
 }
 
+.admin-role-link {
+  color: inherit;
+}
+
+.admin-role-link:hover,
+.admin-role-link:focus-visible {
+  color: #3730a3;
+}
+
 .app-navigation {
   display: flex;
   flex-wrap: wrap;
@@ -165,6 +174,41 @@ p {
 
 .user-management-page {
   max-width: 100%;
+}
+
+.admin-dashboard-page {
+  max-width: 58rem;
+}
+
+.admin-dashboard-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.admin-dashboard-card {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  padding: 1.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  background: #f9fafb;
+}
+
+.admin-dashboard-card h2,
+.admin-dashboard-card p {
+  margin: 0;
+}
+
+.admin-dashboard-card h2 {
+  color: #1f2937;
+  font-size: 1.25rem;
+}
+
+.admin-dashboard-card .dashboard-view-all-link {
+  justify-self: start;
 }
 
 .user-management-subtitle {

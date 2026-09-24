@@ -22,7 +22,12 @@ function Navigation({ currentUser, onLogout }) {
       <div>
         <p className="app-title">ALE Ticket Management Tool</p>
         <p className="user-context">
-          {currentUser.name} <span aria-hidden="true">·</span> {currentUser.role}
+          {currentUser.name} <span aria-hidden="true">·</span>{' '}
+          {currentUser.role === 'admin' ? (
+            <Link className="admin-role-link" to="/admin">{currentUser.role}</Link>
+          ) : (
+            currentUser.role
+          )}
         </p>
       </div>
       <nav className="app-navigation" aria-label="Ticket views">
