@@ -18,6 +18,16 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState(null)
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'dark')
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('ale_theme', theme)
+  }, [theme])
+
+  function handleThemeToggle() {
+    setTheme((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'))
+  }
 
   function handleLoginSuccess(user) {
     setAuthError(null)
@@ -91,7 +101,12 @@ function App() {
 
   return (
     <div className="app-shell">
-      <Navigation currentUser={currentUser} onLogout={handleLogout} />
+      <Navigation
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        theme={theme}
+        onThemeToggle={handleThemeToggle}
+      />
       {authError && <p role="alert">{authError}</p>}
       <main className="app-content">
         <Routes>

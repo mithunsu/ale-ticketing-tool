@@ -14,7 +14,7 @@ function isItemActive(pathname, itemPath) {
   return pathname === itemPath || pathname.startsWith(`${itemPath}/`)
 }
 
-function Navigation({ currentUser, onLogout }) {
+function Navigation({ currentUser, onLogout, theme, onThemeToggle }) {
   const location = useLocation()
 
   return (
@@ -44,6 +44,15 @@ function Navigation({ currentUser, onLogout }) {
             </Link>
           )
         })}
+        <button
+          className="navigation-button theme-toggle"
+          type="button"
+          onClick={onThemeToggle}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {theme === 'dark' ? '☀ Light' : '☾ Dark'}
+        </button>
         <button className="navigation-button logout-button" type="button" onClick={onLogout}>
           Logout
         </button>
