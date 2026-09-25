@@ -1,16 +1,29 @@
-# React + Vite
+# Frontend (React + Vite)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The frontend provides the authenticated browser experience for login, password
+change, dashboards, ticket creation/list/detail, assignment, status changes, public
+comments, activity history, and admin user management.
 
-Currently, two official plugins are available:
+## Local development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+npm install
+npm run dev
+```
 
-## React Compiler
+Vite serves on `http://localhost:5173` and proxies `/api` to
+`http://localhost:5000`. Start the Flask backend and PostgreSQL first; no frontend
+secrets are required for the local proxy.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Production build
 
-## Expanding the Oxlint configuration
+```powershell
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The current Vite production build passes. `npm run lint` is also available through
+Oxlint.
+
+Page and API-facing components live in `src/components`; shared API calls live in
+`src/api.js`. Frontend role-based visibility improves usability, but authorization is
+always enforced by Flask.

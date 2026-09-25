@@ -1,5 +1,58 @@
 # Engineering Decisions
 
+## Current Phase 1 decisions
+
+**Status**: Adopted unless marked deferred. These entries summarize the current
+implementation and supersede contradictory planning notes while older records below
+remain for historical context.
+
+### Flask is the current backend
+
+The current implementation uses Python Flask with blueprints and a JSON REST API.
+Any earlier Node.js/Express backend plan is superseded and retained only as history.
+
+### PostgreSQL is the primary datastore
+
+PostgreSQL 16 remains the durable store for users, tickets, comments, history, and
+attachment metadata. Tickets use UUID primary keys plus generated sequential
+`ticket_number` values.
+
+### Backend RBAC is the security boundary
+
+Flask enforces roles and requester ownership; the React frontend mirrors permissions
+by hiding controls for usability. This prevents direct API callers from bypassing
+frontend visibility rules.
+
+### Local MVP authentication
+
+Phase 1 uses admin-created local email/password accounts, temporary passwords, forced
+first-password change, HTTP-only sessions, and CSRF protection. ALE SSO is deferred to
+future integration.
+
+### Public comments only in Phase 1
+
+The accepted Phase 1 comment workflow is public comments. `internal` and `system`
+comment types remain schema/backend groundwork for later work; internal notes are not
+an MVP blocker or current user-facing requirement.
+
+### Search and filtering are Phase 1.1
+
+Ticket-number/title search, status filtering, priority filtering, and browser RBAC
+validation for those controls are post-MVP work, not failed Phase 1 acceptance.
+
+### Deterministic browser testing
+
+Five disposable local E2E identities (Requester A, Requester B, Support Engineer,
+Manager, and Admin) support repeatable role and persistence checks. Credentials remain
+in the gitignored local E2E environment file and are never documented.
+
+### Core browser acceptance passed
+
+The current milestone is **Phase 1 MVP core workflow browser acceptance: PASS**. This
+does not claim that Phase 1.1 search/filter work is complete.
+
+---
+
 ## Decision: Python Flask for Backend
 
 **Date**: 2026-07-28

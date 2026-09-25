@@ -124,3 +124,44 @@ backend origins to communicate with credentials.
 
 **Create, Read, Update, Delete** - Basic data operations. This API implements only a
 subset for tickets and intentionally omits destructive ticket deletion.
+
+## RBAC
+
+**Role-Based Access Control** - Authorization based on the user's role and, for
+requesters, ownership of the ticket. The backend is the enforcement boundary.
+
+## Session
+
+The HTTP-only Flask cookie state that identifies an authenticated browser user. The
+session stores the user identity rather than a client-managed access token.
+
+## Middleware
+
+Cross-cutting request handling around Flask routes, including request IDs, logging,
+CSRF, CORS, and JSON error responses.
+
+## Parameterized Query
+
+A SQL statement whose values are bound separately from the SQL text. The backend uses
+this pattern to reduce SQL injection risk.
+
+## JSONB
+
+PostgreSQL's binary JSON type. Tickets use it for the validated `setup_snapshot`.
+
+## E2E Test
+
+An end-to-end check that exercises the application through the browser and its running
+backend and database.
+
+## Regression Test
+
+A test that confirms previously working behavior remains working after a change.
+
+## State Machine
+
+The explicit set of allowed ticket status transitions enforced by the backend.
+
+## Audit Log
+
+The immutable `ticket_history` records that capture ticket creation and status changes.

@@ -1,65 +1,70 @@
 # Architecture
 
-## Overview
+## Current system
 
-The ALE Ticket Management Tool is a local React/Flask/PostgreSQL application for
-Alcatel-Lucent Enterprise laboratory support. Phase 1 includes the database
-foundation, session authentication, CSRF protection, user provisioning, ticket
-workflow, comments, assignment, and status history.
+The tool centralizes ALE laboratory support requests that were previously tracked in
+email chains. The current implementation is a local React/Vite frontend, a Python
+Flask REST API, and PostgreSQL 16.
 
-## Technology Stack
-
-- **Frontend**: React with Vite and JavaScript
-- **Backend**: Python Flask application factory with blueprints
-- **Database**: PostgreSQL 16, accessed with psycopg 3
-- **Communication**: JSON REST APIs under `/api`
-- **Local services**: PostgreSQL is supplied by `compose.yml`; Flask and Vite run locally
-
-## Request Flow
-
-```
+```text
 Browser (React/Vite :5173)
         |
-        | credentialed JSON requests + X-CSRF-Token
+        | credentialed JSON requests and X-CSRF-Token
         v
 Flask API (:5000)
-  request IDs, logging, CORS, CSRF
-  auth/session checks and role permissions
-  validation and response envelopes
+  sessions, CSRF, CORS, validation, RBAC, request logging
         |
         v
 PostgreSQL (:5433 host / :5432 container)
   users, tickets, comments, history, attachment metadata
 ```
 
-`create_app()` loads environment configuration, initializes CORS and CSRF, registers
-request middleware, and mounts the health, auth, admin-user, and ticket blueprints.
-Database connections are opened per operation from `DB_HOST`, `DB_PORT`, `DB_NAME`,
-`DB_USER`, and `DB_PASSWORD`, with a five-second timeout.
+`compose.yml` supplies PostgreSQL. Flask and Vite run locally. `create_app()` loads
+`backend/.env`, configures CORS and CSRF, registers request middleware, and mounts
+health, auth, admin-user, user, and ticket blueprints. Connections use the `DB_*`
+environment variables and a five-second timeout.
 
-## Component Responsibilities
+## Responsibilities
 
-- **Frontend**: Forms, session-aware views, CSRF-token handling, and API error display.
-- **Request middleware**: Request ID assignment, timing logs, and JSON handlers for
-  404, 405, CSRF, and 500 errors.
-- **Auth blueprint**: Login, logout, current-user lookup, CSRF-token issuance, and
-  password changes. The signed session stores the authenticated user ID.
-- **Admin blueprint**: Admin-only local account provisioning and one-time temporary
-  password generation.
-- **Ticket blueprint**: Ticket creation/listing/detail, comments, assignment, status
-  transition rules, ownership checks, and audit-history writes.
-- **Database**: Durable account, ticket, comment, history, and attachment metadata.
+- **Frontend**: routing, forms, session-aware views, CSRF-token handling, role-aware
+  controls, ticket dashboards, and API error display.
+- **Backend**: authentication, server-side validation, authorization, ticket workflow,
+  ownership isolation, assignment, public comments, history writes, and response
+  envelopes.
+- **Middleware**: request IDs, timing logs, CORS, and JSON error handling.
+- **Database**: durable users, tickets, public/comment groundwork, status history, and
+  attachment metadata.
 
-## Security Boundaries
+## Authentication and authorization
 
-Passwords are hashed with Werkzeug and never returned by the API. New accounts start
-with `must_change_password = true`; protected endpoints reject those sessions until
-the password is changed, while `/api/auth/me` and the change-password endpoint remain
-available. Requesters are restricted to their own tickets, and all state-changing
-browser requests require a session-backed CSRF token.
+Phase 1 uses admin-created local email/password accounts. Login establishes an
+HTTP-only Flask session; a temporary-password account is restricted until it changes
+that password. CSRF protection covers state-changing requests. The backend is the
+security boundary and enforces role permissions even when the frontend hides a
+control. Requesters are isolated to their own tickets, including anti-enumeration
+responses for another requester's ticket.
 
-## Scope
+## MVP workflow
 
-Phase 1 does not include AI integrations, SSO, ticket deletion, comment editing or
-deletion, attachment upload/download routes, search, or filtering. The schema keeps
-extension points for SSO and attachment metadata without exposing unfinished workflows.
+Tickets support creation, listing, detail, assignment, self-assignment where allowed,
+public comments, activity/history, and persistence. Valid status transitions are
+`New -> Open`, `New -> In Progress`, `Open -> In Progress`, `In Progress -> Resolved`,
+`Resolved -> In Progress`, `Resolved -> Closed`, and `Closed -> In Progress`.
+Resolution is required for `Resolved` and `Closed`; `closed_at` is set on close and
+cleared on reopen. Requesters may reopen their own closed tickets to `In Progress`.
+
+## Frontend and backend structure
+
+React pages live under `frontend/src/components`; API calls are centralized in
+`frontend/src/api.js`. The Flask application is under `backend/app`, with route
+modules in `backend/app/routes`, shared validation/response/database helpers, and
+pytest coverage in `backend/tests`.
+
+## Scope and hosting
+
+The core Phase 1 MVP browser workflow is accepted. Search by ticket number/title,
+status filtering, priority filtering, and browser validation for those controls are
+Phase 1.1. Internal comments/notes are not a Phase 1 user-facing feature even though
+the schema retains `public`, `internal`, and `system` comment types as groundwork.
+ALE SSO, internal hosting hardening, attachments workflows, notifications, and AI/LLM
+features remain future work. See [Deployment](deployment.md) for hosting status.

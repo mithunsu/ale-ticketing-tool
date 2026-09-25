@@ -2,10 +2,10 @@
 
 ## Overview
 
-The ALE Ticket Management Tool exposes JSON REST endpoints under `/api`. Successful
-responses use a `data` object. Errors use an `error` object with `code` and `message`;
-validation errors may also include `details`. Every response includes an `X-Request-ID`
-header.
+The Flask API exposes JSON REST endpoints under `/api`. Successful responses use a
+`data` object; errors use `error.code`, `error.message`, and optional validation
+`details`. Responses include an `X-Request-ID` header. All protected authorization is
+performed by the backend.
 
 ## Health
 
@@ -55,6 +55,10 @@ Body fields are `name`, `email`, `role`, and optional `department`. Allowed role
 temporary password, stores only its hash, sets `must_change_password` to true, and
 returns the one-time `temporary_password` only in this `201` response. Duplicate
 email returns `409 USER_ALREADY_EXISTS`.
+
+`GET /api/admin/users` lists users for admins. Admins can also change a user's role or
+active/inactive status and reset a user's password; these operations preserve the
+last-active-admin invariant and force a reset account to change its password.
 
 ## Tickets
 
@@ -125,3 +129,15 @@ CSRF state is held in the Flask session, not PostgreSQL.
 - `409` Duplicate data or concurrent update conflict
 - `500` Masked internal server error
 - `503` Database health check unavailable
+
+## Current API boundary
+
+The current ticket list supports pagination and exact `status` or `status_not` query
+parameters. Ticket-number/title search and priority/status filter controls in the UI
+are deferred to Phase 1.1 and are not part of the current browser acceptance.
+
+Public comments are the only comment workflow exposed in the Phase 1 UI/API. The
+database comment type column retains `internal` and `system` values for future or
+backend-generated capability; there is no current internal-note acceptance scope.
+Attachment upload/download, SSO, notifications, and AI/LLM endpoints are not
+implemented.

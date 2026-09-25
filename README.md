@@ -1,63 +1,36 @@
 # ALE Ticket Management Tool
 
-The ALE (Alcatel-Lucent Enterprise) Ticket Management Tool is a local web
-application for creating, tracking, and resolving laboratory support tickets.
+The ALE (Alcatel-Lucent Enterprise) Ticket Management Tool replaces laboratory
+support email chains with a shared ticket lifecycle: request, assignment, status
+updates, public conversation, and activity history.
 
-## Technology Stack
+## Current status
 
-| Component | Technology |
-|-----------|------------|
-| Frontend | React with Vite and JavaScript |
-| Backend | Python Flask 3 |
-| Database | PostgreSQL 16 |
-| Database driver | psycopg 3 |
-| API | REST + JSON under `/api` |
+**Phase 1 MVP core workflow browser acceptance: PASS.** The validated workflow covers
+requesters, support engineers, managers, and administrators, including persistence,
+RBAC, public comments, history, and PostgreSQL consistency. Search and filtering are
+deferred to Phase 1.1; SSO and AI-assisted capabilities are future work.
 
-## Project Structure
+## Stack and architecture
 
-```
-ale-ticketing-tool/
-├── frontend/              # React + Vite application
-├── backend/               # Flask application, routes, and tests
-├── database/              # PostgreSQL schema, seed data, and SQL tests
-├── docs/                  # Architecture, API, database, and project decisions
-├── compose.yml            # Local PostgreSQL service
-└── README.md
-```
+React + Vite frontend -> Python Flask REST API -> PostgreSQL 16. Docker Compose
+provides PostgreSQL locally; Flask and Vite run as local development processes.
 
-## Requirements
+Roles are `requester`, `support_engineer`, `manager`, and `admin`. Accounts are
+admin-created local email/password accounts. New accounts receive a temporary password
+and must change it on first login. Authentication uses an HTTP-only Flask session and
+CSRF tokens. The backend enforces authorization; frontend visibility is only UX.
 
-- Node.js 18+ and npm
-- Python 3.14 recommended, with `venv` and `pip`
-- Docker Desktop for the local PostgreSQL service
+## Quick local setup
 
-## Quick Start
+Requirements: Docker Desktop, Node.js/npm, and Python with `venv` and `pip`.
 
-### 1. Start PostgreSQL
-
-From the repository root, provide the `POSTGRES_DB`, `POSTGRES_USER`, and
-`POSTGRES_PASSWORD` values expected by `compose.yml`, then run:
-
-```powershell
-docker compose up -d postgres
-```
-
-PostgreSQL is available on `localhost:5433`.
-
-### 2. Configure and start the backend
-
-Create `backend/.env` with the database settings and a long random Flask secret:
-
-```text
-FLASK_SECRET_KEY=<long-random-value>
-DB_HOST=localhost
-DB_PORT=5433
-DB_NAME=<database-name>
-DB_USER=<database-user>
-DB_PASSWORD=<database-password>
-```
-
-Then run:
+1. Set `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` for Compose, then run
+   `docker compose up -d postgres` from the repository root. PostgreSQL is available
+   at `localhost:5433`.
+2. Create `backend/.env` with a secret and the matching `DB_HOST`, `DB_PORT`,
+   `DB_NAME`, `DB_USER`, and `DB_PASSWORD` values. `FLASK_SECRET_KEY` is required.
+3. Start Flask:
 
 ```powershell
 cd backend
@@ -67,12 +40,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-The backend runs on `http://localhost:5000`. `CORS_ALLOWED_ORIGINS` defaults to
-`http://localhost:5173`; `SESSION_COOKIE_SECURE` defaults to `false` for local HTTP.
-
-### 3. Start the frontend
-
-In a second terminal:
+4. In another terminal, start Vite:
 
 ```powershell
 cd frontend
@@ -80,80 +48,49 @@ npm install
 npm run dev
 ```
 
-The frontend runs on `http://localhost:5173`.
+The backend defaults to `http://localhost:5000`; the frontend defaults to
+`http://localhost:5173`. The Vite development proxy forwards `/api` to Flask.
 
-## Verify the Backend
-
-The health endpoint checks both Flask and PostgreSQL:
-
-```powershell
-curl http://localhost:5000/api/health
-```
-
-Expected healthy response:
-
-```json
-{
-  "status": "healthy",
-  "backend": "active",
-  "database": "connected"
-}
-```
-
-## Authentication Flow
-
-The browser first calls `GET /api/auth/csrf`, then sends the returned token in
-`X-CSRF-Token` for state-changing requests. Login establishes a session. Accounts
-created by an administrator receive a temporary password and must change it before
-using normal protected workflows. A successful password change clears the session and
-requires a fresh login.
-
-## Current Status
-
-Implemented Phase 1 capabilities include:
-
-- PostgreSQL schema, seed data, connection handling, and health checks
-- Session-based login, logout, current-user lookup, and CSRF protection
-- Admin user provisioning with one-time temporary passwords
-- Ticket creation, listing, detail views, comments, assignment, and status transitions
-- Requester ownership checks and role-based authorization
-- Immutable ticket status history and database integrity constraints
-- React login and password-change screens
-- Authenticated top-level navigation shell (Active Tickets, Create Ticket, Closed
-  Tickets, Logout)
-
-Not yet implemented as HTTP workflows:
-
-- SSO integration
-- Attachment upload/download
-- Ticket deletion or general ticket editing
-- Comment editing/deletion
-- Search, filtering, and notifications
-- Frontend ticket list, creation, and detail views
-
-AI and LLM integrations are excluded from Phase 1.
-
-## Tests
-
-Run the backend test suite from the repository root:
+## Useful checks
 
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
 python -m pytest -q
+
+cd ..\frontend
+npm run build
 ```
+
+The latest recorded validation is 388 backend tests passing and a passing Vite
+production build. Use `GET http://localhost:5000/api/health` to check Flask and
+PostgreSQL connectivity.
+
+## MVP capabilities
+
+- Create, list, inspect, assign, and persist tickets
+- Status workflow: `New`, `Open`, `In Progress`, `Resolved`, `Closed`
+- Requester reopen of an owned closed ticket
+- Public comments and immutable status activity/history
+- Admin user management and forced first-password change
+- Backend-enforced ownership and role permissions
+
+## Deferred scope
+
+Phase 1.1 covers ticket-number/title search, status and priority filters, and browser
+RBAC validation for those controls. Phase 2 may include internal notes, AI
+classification, troubleshooting suggestions, summaries, similar-ticket recommendations,
+and AI-assisted response drafting. ALE SSO and internal deployment hardening remain
+future integration work.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) - System design and component responsibilities
-- [API Documentation](docs/api.md) - Endpoint and security contracts
-- [Database Design](docs/database.md) - PostgreSQL tables and constraints
-- [Engineering Decisions](docs/decisions.md) - Adopted technical decisions
-- [Glossary](docs/glossary.md) - Project terminology
-- [Backend README](backend/README.md) - Backend setup and configuration details
-
----
-
-**Project Status**: Phase 1 implementation in progress
-**Last Updated**: 2026-09-17
-**Maintainer**: ALE Lab Team
+- [Architecture](docs/architecture.md)
+- [API](docs/api.md)
+- [Database](docs/database.md)
+- [Testing](docs/testing.md)
+- [Deployment](docs/deployment.md)
+- [Decisions](docs/decisions.md)
+- [Glossary](docs/glossary.md)
+- [Backend setup](backend/README.md)
+- [Frontend setup](frontend/README.md)

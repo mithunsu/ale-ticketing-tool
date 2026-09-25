@@ -1,5 +1,8 @@
 # Backend (Flask)
 
+The backend is the Flask REST API and security boundary for authentication, RBAC,
+ticket workflow, public comments, and PostgreSQL persistence.
+
 ## Local startup
 
 ```powershell
@@ -15,8 +18,11 @@ python run.py
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
-pytest -q
+python -m pytest -q
 ```
+
+The latest recorded backend validation is 388 passing tests. The suite includes
+database-backed authorization and persistence checks where required.
 
 ## Configuration
 
@@ -35,6 +41,10 @@ DB_PASSWORD=<database-password>
 `http://localhost:5173`. `SESSION_COOKIE_SECURE` defaults to `false` for local HTTP
 development. The backend refuses to start without `FLASK_SECRET_KEY` and refuses a
 database connection with incomplete `DB_*` settings.
+
+`FLASK_HOST` defaults to `localhost`, `FLASK_PORT` to `5000`, and `FLASK_DEBUG` to
+`false`. Restart Flask after source changes before live browser validation: with debug
+off, a long-running process continues serving old code.
 
 ## Browser authentication flow
 
@@ -61,3 +71,8 @@ All mutation requests require `X-CSRF-Token`. Protected routes use the authentic
 user's role and ticket ownership to authorize access. Password hashes, temporary
 password hashes, and database connection details are never returned in API errors or
 normal responses.
+
+The frontend is not a security boundary. Backend RBAC, requester isolation, server-side
+validation, parameterized SQL, CSRF, inactive-account checks, and forced password
+changes protect against direct API bypasses, SQL injection, cross-site request forgery,
+and unauthorized workflow access.
