@@ -54,8 +54,10 @@ logs/
 backend/.env
 .env.local
 .env.*.local
+tests/e2e/.env.e2e.local
 !.env.example
 !**/.env.example
+!tests/e2e/.env.e2e.example
 
 # OS
 .DS_Store
