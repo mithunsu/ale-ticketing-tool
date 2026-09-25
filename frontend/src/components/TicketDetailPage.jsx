@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, updateTicketStatus } from '../api'
@@ -36,10 +36,14 @@ function getStatusActions(ticket, currentUser) {
   const canTransitionNormally = isAssignedEngineer || isManagerOrAdmin
   const canStartNewTicket = ticket.assigned_to === currentUser.id
     && (currentUser.role === 'support_engineer' || isManagerOrAdmin)
+  const canOpenUnassignedTicket = !ticket.assigned_to
+    && (currentUser.role === 'support_engineer' || isManagerOrAdmin)
 
   switch (ticket.status) {
     case 'New':
-      return canStartNewTicket ? [{ label: 'Open Ticket', target: 'In Progress' }] : []
+      return canStartNewTicket || canOpenUnassignedTicket
+        ? [{ label: 'OPEN', target: 'In Progress' }]
+        : []
     case 'Open':
       return canTransitionNormally ? [{ label: 'Start Progress', target: 'In Progress' }] : []
     case 'In Progress':
@@ -72,6 +76,7 @@ function TicketDetailPage({ currentUser }) {
   const [assigning, setAssigning] = useState(false)
   const [assignmentError, setAssignmentError] = useState(null)
   const [assignmentSuccess, setAssignmentSuccess] = useState(null)
+  const [showAssignmentModal, setShowAssignmentModal] = useState(false)
   const [assignableUsers, setAssignableUsers] = useState([])
   const [assignableUsersLoading, setAssignableUsersLoading] = useState(false)
   const [assignableUsersError, setAssignableUsersError] = useState(null)
@@ -87,8 +92,24 @@ function TicketDetailPage({ currentUser }) {
   const [commentSubmitting, setCommentSubmitting] = useState(false)
   const [commentSubmitError, setCommentSubmitError] = useState(null)
   const [commentSubmitSuccess, setCommentSubmitSuccess] = useState(null)
+  const assignmentSectionRef = useRef(null)
 
   const canManageAssignment = currentUser?.role === 'manager' || currentUser?.role === 'admin'
+
+  useEffect(() => {
+    if (!showAssignmentModal) {
+      return undefined
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Escape' && !assigning) {
+        setShowAssignmentModal(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showAssignmentModal, assigning])
 
   async function loadTicket() {
     try {
@@ -269,10 +290,9 @@ function TicketDetailPage({ currentUser }) {
       await assignTicket(ticketId, currentUser.id)
       setAssignmentSuccess('Ticket assigned successfully.')
       await loadTicket()
+      setShowAssignmentModal(false)
     } catch (requestError) {
       setAssignmentError(requestError.message)
-      // The server may have changed the ticket even though this request failed; reflect that state.
-      await loadTicket()
     } finally {
       setAssigning(false)
     }
@@ -330,6 +350,21 @@ function TicketDetailPage({ currentUser }) {
     }
   }
 
+  function handleStatusAction(action) {
+    if (ticket.status === 'New' && action.target === 'In Progress' && !ticket.assigned_to) {
+      setAssignmentError(null)
+      setShowAssignmentModal(true)
+      return
+    }
+
+    handleStatusTransition(action.target)
+  }
+
+  function handleGoToAssignment() {
+    setShowAssignmentModal(false)
+    assignmentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
   async function handleSubmitComment(event) {
     event.preventDefault()
 
@@ -380,6 +415,7 @@ function TicketDetailPage({ currentUser }) {
       : ticket.assigned_to
   const currentAssigneeIsListed = assignableUsers.some((user) => user.id === ticket.assigned_to)
   const statusActions = getStatusActions(ticket, currentUser)
+  const supportAssignmentRequired = currentUser?.role === 'support_engineer' && !ticket.assigned_to
 
   return (
     <div className="ticket-detail">
@@ -413,7 +449,7 @@ function TicketDetailPage({ currentUser }) {
               <button
                 key={action.target}
                 type="button"
-                onClick={() => handleStatusTransition(action.target)}
+                onClick={() => handleStatusAction(action)}
                 disabled={statusUpdating || (action.target === 'Resolved' && resolutionDraft.trim() === '')}
               >
                 {statusUpdating ? 'Updating status...' : action.label}
@@ -427,6 +463,9 @@ function TicketDetailPage({ currentUser }) {
             {statusError && <p className="form-error" role="alert">{statusError}</p>}
           </div>
         )}
+        {supportAssignmentRequired && (
+          <p className="status-workflow-guidance">Assign this ticket to yourself to update its status.</p>
+        )}
       </section>
 
       <section className="ticket-detail-section">
@@ -434,7 +473,7 @@ function TicketDetailPage({ currentUser }) {
         <p className="ticket-description">{ticket.description}</p>
       </section>
 
-      <section className="ticket-detail-section">
+      <section className="ticket-detail-section" ref={assignmentSectionRef}>
         <h2>People</h2>
         <dl className="ticket-metadata">
           <div><dt>Requester</dt><dd>{ticket.requester_name || 'Not provided'}</dd></div>
@@ -447,9 +486,11 @@ function TicketDetailPage({ currentUser }) {
           )}
           {!ticket.assigned_to && <div><dt>Assigned To</dt><dd>Unassigned</dd></div>}
         </dl>
-        {currentUser?.role === 'support_engineer' && !ticket.assigned_to && (
-          <div className="assignment-controls">
-            <button type="button" onClick={handleAssignToMe} disabled={assigning}>
+        {supportAssignmentRequired && (
+          <div className="assignment-required">
+            <h3>Assignment required</h3>
+            <p>Assign this ticket to yourself before updating its status or resolving it.</p>
+            <button className="assignment-primary-button" type="button" onClick={handleAssignToMe} disabled={assigning}>
               {assigning ? 'Assigning...' : 'Assign to me'}
             </button>
             {assignmentSuccess && <p className="form-success" role="status">{assignmentSuccess}</p>}
@@ -458,6 +499,9 @@ function TicketDetailPage({ currentUser }) {
         )}
         {canManageAssignment && (
           <div className="assignment-controls">
+            {!ticket.assigned_to && (
+              <p className="assignment-helper-text">Assign this ticket to a support engineer before work begins.</p>
+            )}
             {assignableUsersError && (
               <p className="form-error" role="alert">{assignableUsersError}</p>
             )}
@@ -569,6 +613,53 @@ function TicketDetailPage({ currentUser }) {
           {commentSubmitError && <p className="form-error" role="alert">{commentSubmitError}</p>}
         </form>
       </section>
+
+      {showAssignmentModal && (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !assigning) {
+              setShowAssignmentModal(false)
+            }
+          }}
+        >
+          <section className="success-dialog assignment-modal" role="dialog" aria-modal="true" aria-labelledby="assignment-modal-title">
+            <h2 id="assignment-modal-title">Assignment required</h2>
+            <p>
+              {currentUser.role === 'support_engineer'
+                ? 'This ticket must be assigned before it can be opened. Assign it to yourself first.'
+                : 'This ticket must be assigned before it can be opened. Assign the ticket to a support engineer first.'}
+            </p>
+            {currentUser.role === 'support_engineer' && assignmentError && (
+              <p className="form-error" role="alert">{assignmentError}</p>
+            )}
+            <div className="dialog-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setShowAssignmentModal(false)}
+                disabled={assigning}
+              >
+                Cancel
+              </button>
+              {currentUser.role === 'support_engineer' ? (
+                <button
+                  className="assignment-primary-button"
+                  type="button"
+                  onClick={handleAssignToMe}
+                  disabled={assigning}
+                >
+                  {assigning ? 'Assigning...' : 'Assign to me'}
+                </button>
+              ) : (
+                <button className="assignment-primary-button" type="button" onClick={handleGoToAssignment}>
+                  Go to assignment
+                </button>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
