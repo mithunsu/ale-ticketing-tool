@@ -94,7 +94,7 @@ function RecentTicketRow({ ticket }) {
 
 function DashboardPage() {
   const [metrics, setMetrics] = useState({
-    open: 0,
+    new: 0,
     inProgress: 0,
     critical: 0,
     assignedToMe: 0,
@@ -117,8 +117,8 @@ function DashboardPage() {
       setErrorMetrics(null)
 
       try {
-        const [openData, inProgressData, criticalData, assignedData] = await Promise.all([
-          getTickets({ status: 'Open', limit: 1 }),
+        const [newData, inProgressData, criticalData, assignedData] = await Promise.all([
+          getTickets({ status: 'New', limit: 1 }),
           getTickets({ status: 'In Progress', limit: 1 }),
           getTickets({ priority: 'Critical', limit: 1 }),
           getTickets({ assigned_to: 'me', limit: 1 }),
@@ -126,7 +126,7 @@ function DashboardPage() {
 
         if (active) {
           setMetrics({
-            open: openData.pagination?.total || 0,
+            new: newData.pagination?.total || 0,
             inProgress: inProgressData.pagination?.total || 0,
             critical: criticalData.pagination?.total || 0,
             assignedToMe: assignedData.pagination?.total || 0,
@@ -236,7 +236,7 @@ function DashboardPage() {
       <section className="dashboard-section">
         <h2>Summary</h2>
         <div className="dashboard-metrics">
-          <DashboardMetricCard label="Open" count={metrics.open} link="/tickets?status=Open" />
+          <DashboardMetricCard label="NEW" count={metrics.new} link="/tickets?status=New" />
           <DashboardMetricCard label="In Progress" count={metrics.inProgress} link="/tickets?status=In%20Progress" />
           <DashboardMetricCard label="Critical" count={metrics.critical} link="/tickets?priority=Critical" />
           <DashboardMetricCard label="Assigned to Me" count={metrics.assignedToMe} link="/tickets?assigned_to=me" />

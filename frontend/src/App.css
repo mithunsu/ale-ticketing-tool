@@ -391,17 +391,6 @@ p {
   gap: 1rem;
 }
 
-.back-button {
-  margin: 0 0 1rem;
-  border: none;
-  background: transparent;
-  padding: 0;
-  color: #3730a3;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 600;
-}
-
 .ticket-workbench {
   display: grid;
   grid-template-columns: minmax(240px, 280px) minmax(0, 1fr) minmax(300px, 350px);
@@ -420,13 +409,23 @@ p {
   text-align: left;
 }
 
+.ticket-workbench-right {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+}
+
 .ticket-workbench-left {
-  position: relative;
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+  max-height: calc(100vh - 2rem);
 }
 
 .ticket-context-panel {
-  position: sticky;
-  top: 1rem;
+  position: static;
   display: grid;
   gap: 0.75rem;
   padding: 0.75rem;
@@ -436,14 +435,35 @@ p {
 }
 
 .ticket-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   padding-bottom: 0.25rem;
   border-bottom: 1px solid #e5e7eb;
+}
+
+.ticket-queue-view-all {
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0;
+  white-space: nowrap;
+}
+
+.ticket-queue-view-all:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
 }
 
 .ticket-context-panel h2 {
   margin: 0;
   font-size: 1rem;
-  color: #1f2937;
+  color: var(--color-text);
 }
 
 .ticket-queue-status {
@@ -679,7 +699,6 @@ p {
 .workflow-inline-status-actions button,
 .workflow-inline-action button,
 .ticket-workflow-actions button,
-.status-actions button,
 .comment-form button {
   min-height: 2.5rem;
   padding: 0.5rem 1rem;
@@ -695,7 +714,6 @@ p {
 .workflow-inline-status-actions button:disabled,
 .workflow-inline-action button:disabled,
 .ticket-workflow-actions button:disabled,
-.status-actions button:disabled,
 .comment-form button:disabled {
   cursor: wait;
   opacity: 0.6;
@@ -725,7 +743,7 @@ p {
 
 .status-workflow-guidance {
   margin: 0;
-  color: #4b5563;
+  color: var(--color-text-muted);
   font-size: 0.9rem;
 }
 
@@ -783,8 +801,7 @@ p {
 }
 
 .right-rail-section {
-  position: sticky;
-  top: 1rem;
+  position: static;
 }
 
 .ticket-metadata,
@@ -991,6 +1008,17 @@ p {
     grid-template-columns: 1fr;
   }
 
+  .ticket-workbench-right {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .ticket-workbench-left {
+    position: static;
+    max-height: none;
+  }
+
   .ticket-context-panel,
   .right-rail-section {
     position: static;
@@ -1038,7 +1066,7 @@ p {
 .ticket-form label {
   display: grid;
   gap: 0.35rem;
-  color: #374151;
+  color: var(--color-text);
   font-weight: 600;
 }
 
@@ -1108,7 +1136,6 @@ p {
   }
 
   .ticket-summary {
-    flex-direction: column;
     gap: 1rem;
   }
 
@@ -1423,7 +1450,6 @@ body,
 }
 
 .ticket-link,
-.back-button,
 .ticket-link-button,
 .ticket-list-navigation-link,
 .dashboard-ticket-number,
@@ -1444,7 +1470,6 @@ body,
 .workflow-inline-status-actions button,
 .workflow-inline-action button,
 .ticket-workflow-actions button,
-.status-actions button,
 .comment-form button {
   border-color: var(--color-border);
   color: var(--color-text);
@@ -1457,7 +1482,6 @@ body,
 .workflow-inline-status-actions button,
 .workflow-inline-action button,
 .ticket-workflow-actions button,
-.status-actions button,
 .comment-form button {
   background: var(--color-surface);
 }
@@ -1540,5 +1564,123 @@ textarea::placeholder {
 
 .ticket-link-button:hover {
   color: var(--color-accent-hover);
+}
+
+.ticket-workflow-row {
+  gap: 0.5rem 0.75rem;
+  padding-top: 0.65rem;
+}
+
+.ticket-workflow-badges {
+  flex: 0 1 auto;
+  gap: 0.35rem;
+}
+
+.ticket-workflow-actions {
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.workflow-inline-assignment,
+.workflow-inline-status-actions,
+.workflow-inline-action {
+  gap: 0.35rem;
+}
+
+.workflow-inline-assignment select {
+  box-sizing: border-box;
+  width: min(14rem, 34vw);
+  min-width: 8rem;
+  min-height: 2.2rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.workflow-inline-assignment button,
+.workflow-inline-status-actions button,
+.workflow-inline-action button,
+.ticket-workflow-actions button {
+  min-height: 2.2rem;
+  padding: 0.35rem 0.65rem;
+  white-space: nowrap;
+}
+
+.resolution-editor {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.resolution-editor .resolution-field {
+  max-width: 36rem;
+}
+
+.resolution-editor .resolution-field textarea {
+  box-sizing: border-box;
+  width: min(100%, 36rem);
+  min-width: 0;
+  min-height: 4rem;
+  padding: 0.45rem 0.6rem;
+  border-color: var(--color-border);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+}
+
+.resolution-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.resolution-editor-actions button {
+  min-height: 2.2rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.resolution-editor-actions button:last-child {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.ticket-metadata-compact {
+  gap: 0.4rem;
+}
+
+.ticket-metadata-compact > div {
+  display: grid;
+  grid-template-columns: minmax(5rem, 6.25rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 0.25rem 0.65rem;
+}
+
+.ticket-metadata-compact > div > dt {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.ticket-metadata-compact > div > dd {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ticket-metadata-compact .ticket-detail-resolution {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.15rem;
+  margin-top: 0.15rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--color-border);
 }
 

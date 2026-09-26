@@ -1,15 +1,43 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
-import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, updateTicketStatus } from '../api'
+import { assignTicket, createTicketComment, getAssignableUsers, getTicket, getTicketComments, getTickets, updateTicketStatus } from '../api'
 
-function formatDate(value) {
+function formatMetadataDate(value) {
   if (!value) {
     return ''
   }
 
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  const dateOptions = date.getFullYear() === new Date().getFullYear()
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' }
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return `${date.toLocaleDateString([], dateOptions)}, ${time}`
+}
+
+function formatActivityTime(value) {
+  if (!value) {
+    return ''
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  const dateOptions = date.getFullYear() === now.getFullYear()
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' }
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+  return isToday ? time : `${date.toLocaleDateString([], dateOptions)} · ${time}`
 }
 
 // Renders the existing ticket_history.action value without inventing new semantics for actions we don't special-case.
@@ -85,6 +113,7 @@ function TicketDetailPage({ currentUser }) {
   const [statusError, setStatusError] = useState(null)
   const [statusSuccess, setStatusSuccess] = useState(null)
   const [resolutionDraft, setResolutionDraft] = useState('')
+  const [showResolutionEditor, setShowResolutionEditor] = useState(false)
   const [comments, setComments] = useState([])
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentsError, setCommentsError] = useState(null)
@@ -92,6 +121,9 @@ function TicketDetailPage({ currentUser }) {
   const [commentSubmitting, setCommentSubmitting] = useState(false)
   const [commentSubmitError, setCommentSubmitError] = useState(null)
   const [commentSubmitSuccess, setCommentSubmitSuccess] = useState(null)
+  const [queueTickets, setQueueTickets] = useState([])
+  const [queueLoading, setQueueLoading] = useState(true)
+  const [queueError, setQueueError] = useState(null)
   const assignmentSectionRef = useRef(null)
 
   const canManageAssignment = currentUser?.role === 'manager' || currentUser?.role === 'admin'
@@ -123,6 +155,8 @@ function TicketDetailPage({ currentUser }) {
 
   useEffect(() => {
     let active = true
+    setShowResolutionEditor(false)
+    setResolutionDraft('')
 
     if (!ticketId) {
       setTicket(null)
@@ -205,6 +239,36 @@ function TicketDetailPage({ currentUser }) {
   useEffect(() => {
     setSelectedAssignee(ticket?.assigned_to || '')
   }, [ticket?.assigned_to])
+
+  useEffect(() => {
+    let active = true
+
+    async function loadQueue() {
+      setQueueLoading(true)
+      setQueueError(null)
+
+      try {
+        const data = await getTickets({ limit: 10, status_not: 'Closed' })
+        if (active) {
+          setQueueTickets(data.tickets || [])
+        }
+      } catch (requestError) {
+        if (active) {
+          setQueueError(requestError.message)
+        }
+      } finally {
+        if (active) {
+          setQueueLoading(false)
+        }
+      }
+    }
+
+    loadQueue()
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   // history and comments stay the source of truth; activity is only ever derived from them, never stored separately.
   const activityFeed = useMemo(() => {
@@ -336,6 +400,9 @@ function TicketDetailPage({ currentUser }) {
       await updateTicketStatus(ticketId, targetStatus, resolutionToSend)
       setStatusSuccess('Ticket status updated successfully.')
       setResolutionDraft('')
+      if (targetStatus === 'Resolved') {
+        setShowResolutionEditor(false)
+      }
       await loadTicket()
       // resolving creates a ticket comment server-side, so refresh comments too
       if (targetStatus === 'Resolved') {
@@ -351,6 +418,12 @@ function TicketDetailPage({ currentUser }) {
   }
 
   function handleStatusAction(action) {
+    if (action.target === 'Resolved') {
+      setStatusError(null)
+      setShowResolutionEditor(true)
+      return
+    }
+
     if (ticket.status === 'New' && action.target === 'In Progress' && !ticket.assigned_to) {
       setAssignmentError(null)
       setShowAssignmentModal(true)
@@ -417,202 +490,390 @@ function TicketDetailPage({ currentUser }) {
   const statusActions = getStatusActions(ticket, currentUser)
   const supportAssignmentRequired = currentUser?.role === 'support_engineer' && !ticket.assigned_to
 
+  const setupLabelMap = {
+    server_name: 'Server',
+    server_ip: 'Server IP',
+    platform: 'Platform',
+    dut: 'DUT',
+    aos_image_build: 'AOS Image',
+    pal_server: 'PAL Server',
+    emp: 'EMP',
+    console: 'Console',
+    console_port: 'Console Port',
+    rps: 'RPS',
+    rps_port: 'RPS Port',
+    gateway: 'Gateway',
+    gateway_port: 'Gateway Port',
+    ixia: 'IXIA',
+    ixia_port: 'IXIA Port',
+    full_model: 'Full Model',
+    notes: 'Notes',
+  }
+
+  function formatSetupValue(value) {
+    if (value === null || value === undefined) {
+      return 'N/A'
+    }
+
+    const text = String(value).trim()
+    return text || 'N/A'
+  }
+
+  function buildSetupRows(setupSnapshot) {
+    if (!setupSnapshot || typeof setupSnapshot !== 'object') {
+      return []
+    }
+
+    const entries = Object.entries(setupSnapshot).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    const primaryOrder = [
+      'server_name',
+      'server_ip',
+      'platform',
+      'dut',
+      'aos_image_build',
+      'emp',
+      'console',
+      'console_port',
+      'rps',
+      'rps_port',
+      'gateway',
+      'gateway_port',
+      'ixia',
+      'ixia_port',
+      'pal_server',
+      'full_model',
+      'notes',
+    ]
+
+    const combinedKeyPatterns = [
+      ['console', 'console_port'],
+      ['rps', 'rps_port'],
+      ['gateway', 'gateway_port'],
+      ['ixia', 'ixia_port'],
+    ]
+
+    const seenKeys = new Set()
+    const rows = []
+
+    for (const [key, value] of entries) {
+      if (seenKeys.has(key)) {
+        continue
+      }
+      const pair = combinedKeyPatterns.find(([first, second]) => key === first || key === second)
+      if (pair) {
+        const [first, second] = pair
+        const firstValue = formatSetupValue(setupSnapshot[first])
+        const secondValue = formatSetupValue(setupSnapshot[second])
+        const combinedValue = [firstValue === 'N/A' ? '' : firstValue, secondValue === 'N/A' ? '' : secondValue]
+          .filter(Boolean)
+          .join(' : ')
+
+        if (combinedValue) {
+          rows.push({ key: first, label: setupLabelMap[first], value: combinedValue })
+          seenKeys.add(first)
+          seenKeys.add(second)
+        }
+        continue
+      }
+
+      if (primaryOrder.includes(key)) {
+        rows.push({ key, label: setupLabelMap[key] || key.replace(/_/g, ' '), value: formatSetupValue(value) })
+        seenKeys.add(key)
+      }
+    }
+
+    const optionalRows = entries
+      .filter(([key]) => !seenKeys.has(key) && !primaryOrder.includes(key))
+      .map(([key, value]) => ({
+        key,
+        label: setupLabelMap[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
+        value: formatSetupValue(value),
+      }))
+
+    return [...rows, ...optionalRows]
+  }
+
+  const setupRows = buildSetupRows(ticket.setup_snapshot)
+
+  function formatQueueTime(value) {
+    if (!value) {
+      return ''
+    }
+
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) {
+      return ''
+    }
+
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  }
+
   return (
     <div className="ticket-detail">
-      <button type="button" className="back-button" onClick={onBack}>Back</button>
-
-      <section className="ticket-detail-section ticket-summary">
-        <div>
-          <p className="ticket-number">Ticket #{ticket.ticket_number}</p>
-          <h2>{ticket.title}</h2>
-        </div>
-        <dl className="ticket-metadata">
-          <div><dt>Status</dt><dd>{ticket.status}</dd></div>
-          <div><dt>Priority</dt><dd>{ticket.priority}</dd></div>
-        </dl>
-        {statusActions.length > 0 && (
-          <div className="status-actions">
-            {statusActions.some((action) => action.target === 'Resolved') && (
-              <label>
-                Resolution
-                <textarea
-                  aria-label="Resolution"
-                  value={resolutionDraft}
-                  onChange={(event) => setResolutionDraft(event.target.value)}
-                  disabled={statusUpdating}
-                  rows={3}
-                  required
-                />
-              </label>
-            )}
-            {statusActions.map((action) => (
+      <div className="ticket-workbench">
+        <aside className="ticket-workbench-left">
+          <div className="ticket-context-panel">
+            <div className="ticket-queue-header">
+              <h2>Tickets</h2>
               <button
-                key={action.target}
                 type="button"
-                onClick={() => handleStatusAction(action)}
-                disabled={statusUpdating || (action.target === 'Resolved' && resolutionDraft.trim() === '')}
+                className="ticket-queue-view-all"
+                onClick={() => navigate('/tickets')}
               >
-                {statusUpdating ? 'Updating status...' : action.label}
+                View all
               </button>
-            ))}
-          </div>
-        )}
-        {(statusSuccess || statusError) && (
-          <div className="status-actions">
-            {statusSuccess && <p className="form-success" role="status">{statusSuccess}</p>}
-            {statusError && <p className="form-error" role="alert">{statusError}</p>}
-          </div>
-        )}
-        {supportAssignmentRequired && (
-          <p className="status-workflow-guidance">Assign this ticket to yourself to update its status.</p>
-        )}
-      </section>
-
-      <section className="ticket-detail-section">
-        <h2>Description</h2>
-        <p className="ticket-description">{ticket.description}</p>
-      </section>
-
-      <section className="ticket-detail-section" ref={assignmentSectionRef}>
-        <h2>People</h2>
-        <dl className="ticket-metadata">
-          <div><dt>Requester</dt><dd>{ticket.requester_name || 'Not provided'}</dd></div>
-          {ticket.requester_email && <div><dt>Requester Email</dt><dd>{ticket.requester_email}</dd></div>}
-          {ticket.assigned_to && (
-            <div>
-              <dt>Assigned To</dt>
-              <dd>{assignedToDisplay}</dd>
             </div>
-          )}
-          {!ticket.assigned_to && <div><dt>Assigned To</dt><dd>Unassigned</dd></div>}
-        </dl>
-        {supportAssignmentRequired && (
-          <div className="assignment-required">
-            <h3>Assignment required</h3>
-            <p>Assign this ticket to yourself before updating its status or resolving it.</p>
-            <button className="assignment-primary-button" type="button" onClick={handleAssignToMe} disabled={assigning}>
-              {assigning ? 'Assigning...' : 'Assign to me'}
-            </button>
-            {assignmentSuccess && <p className="form-success" role="status">{assignmentSuccess}</p>}
-            {assignmentError && <p className="form-error" role="alert">{assignmentError}</p>}
+
+            {queueLoading ? (
+              <p className="ticket-queue-status">Loading tickets...</p>
+            ) : queueError ? (
+              <p className="ticket-queue-status form-error" role="alert">Unable to load tickets.</p>
+            ) : queueTickets.length === 0 ? (
+              <p className="ticket-queue-status">No tickets found.</p>
+            ) : (
+              <ul className="ticket-queue-list">
+                {queueTickets.map((queueTicket) => {
+                  const isSelected = queueTicket.id != null && ticketId != null
+                    && String(queueTicket.id) === String(ticketId)
+                  const queueTime = formatQueueTime(queueTicket.updated_at || queueTicket.created_at)
+
+                  return (
+                    <li key={queueTicket.id}>
+                      <button
+                        type="button"
+                        className={`ticket-queue-item${isSelected ? ' selected' : ''}`}
+                        onClick={() => navigate(`/tickets/${queueTicket.id}`)}
+                      >
+                        <div className="ticket-queue-meta-row">
+                          <span className="ticket-queue-number">#{queueTicket.ticket_number}</span>
+                          {queueTime && <span className="ticket-queue-time">{queueTime}</span>}
+                        </div>
+                        <span className="ticket-queue-title">{queueTicket.title}</span>
+                        <div className="ticket-queue-badges">
+                          <span className="ticket-queue-status-pill">{queueTicket.status}</span>
+                          <span className="ticket-queue-priority-pill">{queueTicket.priority}</span>
+                        </div>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
           </div>
-        )}
-        {canManageAssignment && (
-          <div className="assignment-controls">
-            {!ticket.assigned_to && (
-              <p className="assignment-helper-text">Assign this ticket to a support engineer before work begins.</p>
-            )}
-            {assignableUsersError && (
-              <p className="form-error" role="alert">{assignableUsersError}</p>
-            )}
-            {!assignableUsersError && (
-              <>
-                <select
-                  aria-label="Assignee"
-                  value={selectedAssignee}
-                  onChange={(event) => setSelectedAssignee(event.target.value)}
-                  disabled={assigning || assignableUsersLoading}
-                >
-                  <option value="">Unassigned</option>
-                  {ticket.assigned_to && !currentAssigneeIsListed && (
-                    <option value={ticket.assigned_to} disabled>
-                      Current assignee (not currently assignable)
-                    </option>
-                  )}
-                  {assignableUsers.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.name} — {user.role}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handleUpdateAssignment}
-                  disabled={assigning || assignableUsersLoading}
-                >
-                  {assigning ? 'Updating assignment...' : 'Update assignment'}
-                </button>
-              </>
-            )}
-            {assignmentSuccess && <p className="form-success" role="status">{assignmentSuccess}</p>}
-            {assignmentError && <p className="form-error" role="alert">{assignmentError}</p>}
-          </div>
-        )}
-      </section>
+        </aside>
 
-      <section className="ticket-detail-section">
-        <h2>Dates</h2>
-        <dl className="ticket-metadata">
-          {ticket.created_at && <div><dt>Created</dt><dd>{formatDate(ticket.created_at)}</dd></div>}
-          {ticket.updated_at && <div><dt>Updated</dt><dd>{formatDate(ticket.updated_at)}</dd></div>}
-          {ticket.due_date && <div><dt>Due</dt><dd>{formatDate(ticket.due_date)}</dd></div>}
-          {ticket.closed_at && <div><dt>Closed</dt><dd>{formatDate(ticket.closed_at)}</dd></div>}
-        </dl>
-      </section>
+        <main className="ticket-workbench-main">
+          <section className="ticket-detail-section ticket-summary">
+            <div className="ticket-summary-header">
+              <p className="ticket-meta-line">
+                #{ticket.ticket_number} · {ticket.requester_name || 'Requester unavailable'}
+                {ticket.created_at ? ` · created ${new Date(ticket.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : ''}
+              </p>
+              <h1 className="ticket-title">{ticket.title}</h1>
+            </div>
 
-      {ticket.resolution && (
-        <section className="ticket-detail-section">
-          <h2>Resolution</h2>
-          <p className="ticket-description">{ticket.resolution}</p>
-        </section>
-      )}
-
-      <section className="ticket-detail-section">
-        <h2>Setup Information</h2>
-        {ticket.setup_snapshot && Object.keys(ticket.setup_snapshot).length > 0 ? (
-          <dl className="setup-snapshot">
-            {Object.entries(ticket.setup_snapshot).map(([key, value]) => (
-              <div key={key}>
-                <dt>{key}</dt>
-                <dd>{value === null || value === '' ? 'Not provided' : String(value)}</dd>
+            <div className="ticket-workflow-row" ref={assignmentSectionRef}>
+              <div className="ticket-workflow-badges">
+                <span className="status-badge">{ticket.status}</span>
+                <span className="priority-badge">{ticket.priority}</span>
+                <span className="assignee-pill">{ticket.assigned_to ? assignedToDisplay : 'Unassigned'}</span>
               </div>
-            ))}
-          </dl>
-        ) : (
-          <p>No setup information provided.</p>
-        )}
-      </section>
 
-      <section className="ticket-detail-section">
-        <h2>Activity</h2>
-        {commentsError && <p className="form-error" role="alert">{commentsError}</p>}
-        {activityFeed.length === 0 && !commentsLoading && <p>No activity yet.</p>}
-        {activityFeed.length > 0 && (
-          <ol className="ticket-activity">
-            {activityFeed.map((item) => (
-              item.activityType === 'history' ? (
-                <li key={`history-${item.id}`} className="activity-entry activity-entry-history">
-                  <strong>{item.data.actor_name || item.data.actor_email || 'System'}</strong>
-                  <span>{formatHistoryAction(item.data)}</span>
-                  <span>{formatDate(item.data.created_at)}</span>
-                </li>
-              ) : (
-                <li key={`comment-${item.id}`} className="activity-entry activity-entry-comment">
-                  <strong>{item.data.author_name || item.data.author_email || 'Unknown'}</strong>
-                  <p className="ticket-description">{item.data.comment}</p>
-                  <span>{formatDate(item.data.created_at)}</span>
-                </li>
-              )
-            ))}
-          </ol>
-        )}
-        {commentsLoading && <p>Loading comments...</p>}
+              <div className="ticket-workflow-actions">
+                {supportAssignmentRequired && (
+                  <div className="workflow-inline-action">
+                    <button className="assignment-primary-button" type="button" onClick={handleAssignToMe} disabled={assigning}>
+                      {assigning ? 'Assigning...' : 'Assign to me'}
+                    </button>
+                  </div>
+                )}
 
-        <form className="comment-form" onSubmit={handleSubmitComment}>
-          <textarea
-            aria-label="New comment"
-            value={commentText}
-            onChange={(event) => setCommentText(event.target.value)}
-            disabled={commentSubmitting}
-            rows={3}
-          />
-          <button type="submit" disabled={commentSubmitting}>
-            {commentSubmitting ? 'Posting...' : 'Submit'}
-          </button>
-          {commentSubmitSuccess && <p className="form-success" role="status">{commentSubmitSuccess}</p>}
-          {commentSubmitError && <p className="form-error" role="alert">{commentSubmitError}</p>}
-        </form>
-      </section>
+                {canManageAssignment && (
+                  <div className="workflow-inline-assignment">
+                    {assignableUsersError && (
+                      <p className="form-error" role="alert">{assignableUsersError}</p>
+                    )}
+                    {!assignableUsersError && (
+                      <>
+                        <select
+                          aria-label="Assignee"
+                          value={selectedAssignee}
+                          onChange={(event) => setSelectedAssignee(event.target.value)}
+                          disabled={assigning || assignableUsersLoading}
+                        >
+                          <option value="">Unassigned</option>
+                          {ticket.assigned_to && !currentAssigneeIsListed && (
+                            <option value={ticket.assigned_to} disabled>
+                              Current assignee (not currently assignable)
+                            </option>
+                          )}
+                          {assignableUsers.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.name} — {user.role}
+                            </option>
+                          ))}
+                        </select>
+                        <button type="button" onClick={handleUpdateAssignment} disabled={assigning || assignableUsersLoading}>
+                          {assigning ? 'Assigning...' : 'Assign'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {statusActions.length > 0 && (
+                  <div className="workflow-inline-status-actions">
+                    {statusActions.map((action) => (
+                      <button
+                        key={action.target}
+                        type="button"
+                        onClick={() => handleStatusAction(action)}
+                        disabled={statusUpdating}
+                      >
+                        {statusUpdating ? 'Updating status...' : action.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {showResolutionEditor && statusActions.some((action) => action.target === 'Resolved') && (
+              <div className="resolution-editor">
+                <label className="resolution-field">
+                  Resolution
+                  <textarea
+                    aria-label="Resolution"
+                    placeholder="Explain how the issue was resolved..."
+                    value={resolutionDraft}
+                    onChange={(event) => setResolutionDraft(event.target.value)}
+                    disabled={statusUpdating}
+                    rows={2}
+                    required
+                  />
+                </label>
+                <div className="resolution-editor-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowResolutionEditor(false)
+                      setResolutionDraft('')
+                      setStatusError(null)
+                    }}
+                    disabled={statusUpdating}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStatusTransition('Resolved')}
+                    disabled={statusUpdating || resolutionDraft.trim() === ''}
+                  >
+                    {statusUpdating ? 'Resolving...' : 'Confirm Resolve'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {(statusSuccess || statusError) && (
+              <div className="ticket-workflow-message">
+                {statusSuccess && <p className="form-success" role="status">{statusSuccess}</p>}
+                {statusError && <p className="form-error" role="alert">{statusError}</p>}
+              </div>
+            )}
+            {supportAssignmentRequired && (
+              <p className="status-workflow-guidance">Assign this ticket to yourself to update its status.</p>
+            )}
+            {assignmentSuccess && <p className="form-success" role="status">{assignmentSuccess}</p>}
+            {assignmentError && <p className="form-error" role="alert">{assignmentError}</p>}
+          </section>
+
+          <section className="ticket-detail-section">
+            <h2>Description</h2>
+            <p className="ticket-description">{ticket.description}</p>
+          </section>
+
+          <section className="ticket-detail-section ticket-activity-section">
+            <h2>Activity</h2>
+            {commentsError && <p className="form-error" role="alert">{commentsError}</p>}
+            {activityFeed.length === 0 && !commentsLoading && <p>No activity yet.</p>}
+            {activityFeed.length > 0 && (
+              <ol className="ticket-activity">
+                {activityFeed.map((item) => {
+                  if (item.activityType === 'history') {
+                    return (
+                      <li key={`history-${item.id}`} className="activity-entry activity-entry-history">
+                        <strong>{item.data.actor_name || item.data.actor_email || 'System'}</strong>
+                        <span className="activity-history-action">{formatHistoryAction(item.data)}</span>
+                        <time dateTime={item.data.created_at}>{formatActivityTime(item.data.created_at)}</time>
+                      </li>
+                    )
+                  }
+
+                  const commentType = item.data.comment_type || 'public'
+                  const commentClass = commentType === 'system' ? ' activity-comment-system' : ''
+
+                  return (
+                    <li key={`comment-${item.id}`} className={`activity-entry activity-entry-comment${commentClass}`}>
+                      <div className="activity-comment-header">
+                        <strong>{item.data.author_name || item.data.author_email || 'Unknown'}</strong>
+                        {commentType === 'system' && <span className="activity-system-label">System</span>}
+                      </div>
+                      <p>{item.data.comment}</p>
+                      <time dateTime={item.data.created_at}>{formatActivityTime(item.data.created_at)}</time>
+                    </li>
+                  )
+                })}
+              </ol>
+            )}
+            {commentsLoading && <p>Loading comments...</p>}
+
+            <form className="comment-form" onSubmit={handleSubmitComment}>
+              <textarea
+                aria-label="New comment"
+                value={commentText}
+                onChange={(event) => setCommentText(event.target.value)}
+                disabled={commentSubmitting}
+                rows={3}
+              />
+              <button type="submit" disabled={commentSubmitting}>
+                {commentSubmitting ? 'Posting...' : 'Submit'}
+              </button>
+              {commentSubmitSuccess && <p className="form-success" role="status">{commentSubmitSuccess}</p>}
+              {commentSubmitError && <p className="form-error" role="alert">{commentSubmitError}</p>}
+            </form>
+          </section>
+        </main>
+
+        <aside className="ticket-workbench-right">
+          <section className="ticket-detail-section right-rail-section">
+            <h2>Setup Information</h2>
+            {setupRows.length > 0 ? (
+              <dl className="setup-readout">
+                {setupRows.map(({ key, label, value }) => (
+                  <div key={key} className="setup-readout-row">
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p>No setup information provided.</p>
+            )}
+          </section>
+
+          <section className="ticket-detail-section right-rail-section">
+            <h2>Other Details</h2>
+            <dl className="ticket-metadata ticket-metadata-compact">
+              {ticket.created_at && <div><dt>Created</dt><dd>{formatMetadataDate(ticket.created_at)}</dd></div>}
+              {ticket.updated_at && <div><dt>Updated</dt><dd>{formatMetadataDate(ticket.updated_at)}</dd></div>}
+              {ticket.due_date && <div><dt>Due Date</dt><dd>{formatMetadataDate(ticket.due_date)}</dd></div>}
+              {ticket.closed_at && <div><dt>Closed</dt><dd>{formatMetadataDate(ticket.closed_at)}</dd></div>}
+              {ticket.resolution && <div className="ticket-detail-resolution"><dt>Resolution</dt><dd>{ticket.resolution}</dd></div>}
+            </dl>
+          </section>
+        </aside>
+      </div>
 
       {showAssignmentModal && (
         <div
